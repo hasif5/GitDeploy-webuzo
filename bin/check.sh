@@ -26,14 +26,20 @@ command -v /usr/sbin/sendmail >/dev/null 2>&1 || warn "sendmail not found — em
 
 head "Package files"
 for f in lib/common.php lib/ghapp.php bin/runner.php bin/build.sh bin/asuser.sh \
-         web/enduser/index.php web/enduser/hook.php webuzo/plugin/gitdeploy.php \
-         webuzo/enduser_locations_gitdeploy.conf conf/github_known_hosts; do
+         web/enduser/index.php web/enduser/hook.php web/admin/index.php \
+         webuzo/plugin/gitdeploy.php \
+         webuzo/enduser_locations_gitdeploy.conf webuzo/admin_locations_gitdeploy.conf \
+         conf/github_known_hosts; do
 	[ -s "$ROOT/$f" ] && ok "$f" || bad "$ROOT/$f is missing or empty"
 done
-for f in lib/common.php lib/ghapp.php bin/runner.php web/enduser/index.php web/enduser/hook.php webuzo/plugin/gitdeploy.php; do
+for f in lib/common.php lib/ghapp.php bin/runner.php web/enduser/index.php web/enduser/hook.php \
+         web/admin/index.php webuzo/plugin/gitdeploy.php; do
 	$PHP -l "$ROOT/$f" >/dev/null 2>&1 || bad "$f has a PHP syntax error"
 done
+# The admin page reuses the enduser stylesheet through a relative symlink.
+[ -e "$ROOT/web/admin/assets/style.css" ] || bad "$ROOT/web/admin/assets is not resolving (admin page will be unstyled)"
 bash -n "$ROOT/bin/build.sh" 2>/dev/null || bad "bin/build.sh has a shell syntax error"
+bash -n "$ROOT/bin/asuser.sh" 2>/dev/null || bad "bin/asuser.sh has a shell syntax error"
 [ -x "$ROOT/bin/build.sh" ] && [ -x "$ROOT/bin/asuser.sh" ] || bad "bin/build.sh and bin/asuser.sh must be executable"
 
 head "Panel integration"
@@ -45,6 +51,9 @@ chk_link(){ # <path> <expected target>
 chk_link /usr/local/webuzo/plugins/gitdeploy "$ROOT/webuzo/plugin"
 chk_link /usr/local/webuzo/web/enduser/gitdeploy "$ROOT/web/enduser"
 chk_link /usr/local/webuzo/conf/webuzo/emps/enduser_locations_gitdeploy.conf "$ROOT/webuzo/enduser_locations_gitdeploy.conf"
+# Admin panel (ports 2004/2005) — the server owner's overview page.
+chk_link /usr/local/webuzo/web/admin/gitdeploy "$ROOT/web/admin"
+chk_link /usr/local/webuzo/conf/webuzo/emps/admin_locations_gitdeploy.conf "$ROOT/webuzo/admin_locations_gitdeploy.conf"
 
 if $PHP -r '$j=json_decode(file_get_contents("/var/webuzo/plugins.json"),true); exit(isset($j["gitdeploy/gitdeploy.php"])?0:1);' 2>/dev/null; then
 	ok "registered in /var/webuzo/plugins.json"
@@ -135,6 +144,15 @@ if [ -f "$STATE/.heartbeat" ]; then
 	else bad "runner has not run for ${AGE}s — check cron: systemctl status crond"; fi
 else
 	warn "no heartbeat yet — the runner has not run since this version was installed (wait a minute)"
+fi
+
+# Deploys can be switched off server-wide from the admin panel. Say so loudly:
+# a paused queue looks exactly like a broken one from the outside.
+if [ -f "$STATE/.paused" ]; then
+	QUEUED=$(ls -1 "$STATE"/spool/*.json 2>/dev/null | wc -l)
+	warn "DEPLOYS ARE PAUSED server-wide (admin panel -> GitDeploy). $QUEUED job(s) are waiting and nothing will build until you resume. Flag: $STATE/.paused"
+else
+	ok "deploys are not paused"
 fi
 
 head "Sites"

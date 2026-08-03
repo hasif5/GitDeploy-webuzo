@@ -247,6 +247,10 @@ function gd_scope_sites($viewer, $is_root){
 		$cfg = gd_load_site($site);
 		if(!$cfg){ if($is_root) $broken++; continue; }
 		$owner_acct = (string)$cfg['user'];
+		// Deliberately strict: ownership is ONLY info['owner'] == the reseller. A
+		// reseller's own hosting account is not matched unless someone set owner on
+		// it, which errs towards showing less. Widening this is a one-line change,
+		// but it is a security boundary, so it does not get widened by accident.
 		if(!$is_root && gd_account_owner($owner_acct) !== $viewer) continue;
 		$sites[$site] = $cfg;
 		$users[$owner_acct] = true;

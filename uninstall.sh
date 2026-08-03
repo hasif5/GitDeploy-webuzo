@@ -17,7 +17,7 @@ set -euo pipefail
 
 ROOT=/usr/local/gitdeploy
 STATE=/var/lib/gitdeploy
-# Pre-1.5.1 layout. Kept here so --purge cleans it up too, and so a purge still finds
+# Pre-1.6.0 layout. Kept here so --purge cleans it up too, and so a purge still finds
 # the site list on a box that was never migrated.
 OLD_STATE=/var/webuzo/conf/gitdeploy
 
@@ -35,6 +35,9 @@ NGINX_CONF=/usr/local/emps/etc/nginx/nginx.conf
 LINK_PLUGIN=$WEBUZO_ROOT/plugins/gitdeploy
 LINK_WEB=$WEBUZO_ROOT/web/enduser/gitdeploy
 LINK_NGINX=$WEBUZO_ROOT/conf/webuzo/emps/enduser_locations_gitdeploy.conf
+# Admin panel (ports 2004/2005): the server owner's overview page.
+LINK_WEB_ADMIN=$WEBUZO_ROOT/web/admin/gitdeploy
+LINK_NGINX_ADMIN=$WEBUZO_ROOT/conf/webuzo/emps/admin_locations_gitdeploy.conf
 
 CRON_FILE=/etc/cron.d/gitdeploy
 LOGROTATE_FILE=/etc/logrotate.d/gitdeploy
@@ -100,7 +103,7 @@ done
 
 # ---------------------------------------------------------------- symlinks -
 say "Removing symlinks"
-for l in "$LINK_PLUGIN" "$LINK_WEB" "$LINK_NGINX"; do
+for l in "$LINK_PLUGIN" "$LINK_WEB" "$LINK_NGINX" "$LINK_WEB_ADMIN" "$LINK_NGINX_ADMIN"; do
 	if [[ -L "$l" ]]; then
 		rm -f "$l"; ok "removed $l"
 	elif [[ -e "$l" ]]; then
@@ -123,9 +126,9 @@ if [[ -x "$NGINX" ]]; then
 			cat "$NGX_OUT" >&2
 		fi
 	else
-		# Our drop-in is already gone, so this failure is NOT ours. Do not
+		# Our drop-ins are already gone, so this failure is NOT ours. Do not
 		# restore anything; just make it loud.
-		warn "nginx -t FAILED after our symlink was removed — this is a pre-existing"
+		warn "nginx -t FAILED after our symlinks were removed — this is a pre-existing"
 		warn "problem in the Webuzo nginx config, not GitDeploy. NOT reloading."
 		cat "$NGX_OUT" >&2
 	fi
@@ -357,7 +360,7 @@ else
 	say "Keeping site data"
 	ok "$STATE left intact — re-running install.sh restores every site as-is"
 	if [[ -d "$OLD_STATE" ]]; then
-		ok "$OLD_STATE (pre-1.5.1 location) also left intact"
+		ok "$OLD_STATE (pre-1.6.0 location) also left intact"
 	fi
 fi
 

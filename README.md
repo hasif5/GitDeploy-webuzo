@@ -1,9 +1,14 @@
-# GitDeploy
+# GitDeploy for Webuzo
 
 **Powered by [Digitalbkk Co., Ltd.](https://www.digitalbkk.com) — developed by the Digitalbkk team. Author: Hasif Ahmed <hasif5@gmail.com>**
 
+Push to deploy static sites from GitHub to your Webuzo domains. No Docker, no
+Node process left running — the server builds on push and publishes the result.
+
 A Webuzo v4 plugin that deploys static sites (Vite, Astro, Next export — anything
-that produces a `dist/`) from GitHub straight into a domain's docroot.
+that produces a `dist/`) from GitHub straight into a domain's docroot. It works
+out how to build most projects on its own, and installs the Node version a
+repository asks for without touching the server's own Node.
 
 An end user picks a repo, branch, build command and output directory in the
 panel. A GitHub webhook (or the "Deploy now" button) queues a job; a root cron
@@ -12,6 +17,8 @@ builds as that **unprivileged user**, and rsyncs the output into the domain's
 docroot.
 
 - **Panel:** enduser panel → **Apps → GitDeploy**
+- **Server view:** admin panel (ports 2004/2005) → **GitDeploy** — every account's
+  deployments, disk use per account and a global pause switch
 - **Version:** see `VERSION`
 - **Package root:** `/usr/local/gitdeploy` (code — replaceable)
 - **State root:** `/var/lib/gitdeploy` (data — precious)
@@ -126,8 +133,11 @@ guaranteed readable by an older one.
 | `web/enduser/index.php` | 0644 | panel UI (root FPM) |
 | `web/enduser/hook.php` | 0644 | GitHub webhook receiver (**webuzo** FPM) |
 | `web/enduser/assets/` | 0755/0644 | static assets |
+| `web/admin/index.php` | 0644 | admin panel server overview (root FPM) |
+| `web/admin/assets` | symlink | → `../enduser/assets` (one stylesheet, both panels) |
 | `webuzo/plugin/gitdeploy.php` | 0644 | Webuzo plugin — registers the panel icon |
-| `webuzo/enduser_locations_gitdeploy.conf` | 0644 | nginx location drop-in |
+| `webuzo/enduser_locations_gitdeploy.conf` | 0644 | nginx location drop-in (enduser) |
+| `webuzo/admin_locations_gitdeploy.conf` | 0644 | nginx location drop-in (admin, **no webhook**) |
 
 ### State — `/var/lib/gitdeploy` (data, survives upgrades)
 
@@ -135,6 +145,8 @@ guaranteed readable by an older one.
 | --- | --- | --- | --- | --- |
 | *(base)* | `root:root` | **0711** | traversable, **not listable** | — |
 | `.csrf_key` | `root:root` | 0600 | panel CSRF secret | root only |
+| `.paused` | `root:root` | 0600 | present = deploys paused server-wide | root only |
+| `.diskcache.json` | `root:root` | 0600 | cached `~/.gitdeploy` sizes per account | root only |
 | `ghapp-<user>.json` | `root:root` | 0600 | GitHub App creds incl. RSA private key | root only |
 | `sites/` | `root:root` | 0700 | per-site config `<domain>.json` (files 0600 `root:root`) | root only |
 | `locks/` | `root:root` | 0700 | runner + per-site flocks | root only |
@@ -184,7 +196,9 @@ directory empty for you to `rmdir`.
 | --- | --- | --- |
 | `/usr/local/webuzo/plugins/gitdeploy` | symlink | `…/gitdeploy/webuzo/plugin` |
 | `/usr/local/webuzo/web/enduser/gitdeploy` | symlink | `…/gitdeploy/web/enduser` |
+| `/usr/local/webuzo/web/admin/gitdeploy` | symlink | `…/gitdeploy/web/admin` |
 | `/usr/local/webuzo/conf/webuzo/emps/enduser_locations_gitdeploy.conf` | symlink | `…/gitdeploy/webuzo/enduser_locations_gitdeploy.conf` |
+| `/usr/local/webuzo/conf/webuzo/emps/admin_locations_gitdeploy.conf` | symlink | `…/gitdeploy/webuzo/admin_locations_gitdeploy.conf` |
 | `/var/webuzo/plugins.json` | key | `"gitdeploy/gitdeploy.php": <unixtime>` |
 | `/var/webuzo/plans/*` | key | `features.gitdeploy = 1` |
 | `/etc/cron.d/gitdeploy` | file 0644 | runs `bin/runner.php` every minute |
@@ -265,6 +279,55 @@ site configuration. State deliberately lives outside `/var/webuzo` — see
 
 ---
 
+## The server administrator page
+
+Open the **admin** panel (ports 2004/2005) → **GitDeploy**. It is a root-FPM page
+embedded exactly like the enduser one: the plugin registers an `admin_menu` entry
+plus an `admin_act`, and the act (which runs as the non-root panel user) frames
+`gitdeploy/` from `admin_locations_gitdeploy.conf`. There is deliberately **no
+webhook location** in the admin drop-in — the webhook is an enduser endpoint only.
+
+**Who sees what** (enforced in `web/admin/index.php`, in this order):
+
+1. The request must be on the admin panel — `Webuzo_Sessions::is_admin_panel()`.
+   A copy of the page reached on the enduser port refuses to run at all.
+2. There must be a valid panel session.
+3. `root` — the server owner — sees **every** hosting account.
+4. Any other admin-panel user is treated as a **reseller** and sees only the
+   accounts whose `/var/webuzo/users/<u>/info` has `owner` equal to their
+   username. Never all accounts.
+5. Anything else is refused with a plain message.
+
+The page is not added to `reseller_menu` / `reseller_acts`: it enforces its own
+scope, and staying out of reseller menus is the conservative default.
+
+**What it does**
+
+- *At a glance* — sites in scope, how many are live / failed / building, and the
+  runner heartbeat (healthy under 180s, the same threshold `bin/check.sh` uses).
+- *All sites* — domain, owning account, repository, branch, state, last deploy
+  and short commit sha, **sorted so failures come first**.
+- *Disk used* — `~/.gitdeploy` per account, split into build workspaces, release
+  archives and Node toolchains (~200 MB each). Measured by running `du` **as the
+  account** through `bin/asuser.sh disk` behind `setpriv` + `timeout` — root never
+  walks a user's home — and cached in `.diskcache.json` for five minutes so the
+  page always renders quickly.
+- *Pause all deploys* (server owner only) — writes `/var/lib/gitdeploy/.paused`.
+  The runner then builds nothing and **leaves every queued job in the spool**, so
+  pushes that arrive while paused deploy as soon as you resume. The pause is
+  announced in the runner log and reported by `bin/check.sh`, because a paused
+  queue otherwise looks exactly like a broken one.
+- *Deploy now* and *View log* per site. There is **no delete and no edit**: site
+  configuration stays with the account that owns it.
+
+```bash
+# pause / resume from the shell (same flag the page writes)
+touch /var/lib/gitdeploy/.paused
+rm -f  /var/lib/gitdeploy/.paused
+```
+
+---
+
 ## Operations
 
 ```bash
@@ -293,6 +356,10 @@ cat /var/lib/gitdeploy/status/<domain>.json
 `hookinfo/<domain>.json`. Confirm `hookinfo/` is still `root:webuzo 0750` — if a
 manual `chown -R` flattened it, the `webuzo` FPM pool can no longer read the
 secret. `install.sh --repair` fixes the modes.
+
+**Nothing deploying at all?** Check whether deploys are paused server-wide:
+`ls -l /var/lib/gitdeploy/.paused` (or run `bin/check.sh`, which says so). Queued
+jobs are kept while paused — resume from the admin panel and they drain.
 
 **Deploys hanging?** Check for a stale lock in
 `/var/lib/gitdeploy/locks/`. The runner uses `flock`, so a leftover file

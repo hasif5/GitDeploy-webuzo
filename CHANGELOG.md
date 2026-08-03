@@ -15,6 +15,41 @@ uses semantic versioning.
 
 ---
 
+## [1.7.0] — 2026-08-03
+
+### Added
+
+- **Server administrator page** in the Webuzo admin panel (ports 2004/2005) →
+  **GitDeploy**. Shows every account's sites in one table (owner, repository,
+  branch, state, last deploy, commit) with failures sorted first, a summary of
+  site states, and runner health.
+- **Disk used per account**, split into build workspaces, release archives and
+  Node toolchains. Measured by a read-only `asuser.sh disk` op run as the account
+  owner — root never walks a user's home — and cached for five minutes so
+  rendering the page never waits on `du`.
+- **Global pause switch** on the admin page. While paused the runner builds
+  nothing, and queued jobs are left in the spool rather than discarded, so every
+  push that arrives during a pause deploys once it is lifted. The runner logs why
+  it is idle, and `install.sh --check` reports the paused state.
+- Per-site **Deploy now** and **View log** for administrators. Deliberately no
+  edit or delete: site configuration stays with the account that owns it.
+
+### Security
+
+- The admin page refuses to run unless it is being served on an admin panel port,
+  checked before the session is even loaded.
+- Resellers also sign in to the admin panel, so scope is enforced by account
+  ownership: `root` sees every account, any other admin-panel user sees only
+  accounts whose `owner` names them, and anyone else is refused. The pause switch
+  is root-only. The plugin does not register itself in reseller menus.
+
+### Fixed
+
+- `~/.gitdeploy/toolchains` is no longer treated as an abandoned site workspace by
+  the orphan collector, which would have deleted an account's Node toolchains
+  after 24 hours and forced a needless re-download. Both the collector and the
+  privilege-drop helper now refuse the name.
+
 ## [1.6.0] — 2026-08-03
 
 ### Added

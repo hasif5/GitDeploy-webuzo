@@ -12,7 +12,9 @@
 #                                                                contents migrated to /var/lib)
 #   /usr/local/webuzo/plugins/gitdeploy                         (symlink)
 #   /usr/local/webuzo/web/enduser/gitdeploy                     (symlink)
+#   /usr/local/webuzo/web/admin/gitdeploy                       (symlink)
 #   /usr/local/webuzo/conf/webuzo/emps/enduser_locations_gitdeploy.conf (symlink)
+#   /usr/local/webuzo/conf/webuzo/emps/admin_locations_gitdeploy.conf   (symlink)
 #   /var/webuzo/plugins.json                                    (one key added)
 #   /var/webuzo/plans/*                                         (features.gitdeploy=1, backed up)
 #   /etc/cron.d/gitdeploy, /etc/logrotate.d/gitdeploy           (created)
@@ -44,6 +46,9 @@ NGINX_CONF=/usr/local/emps/etc/nginx/nginx.conf
 LINK_PLUGIN=$WEBUZO_ROOT/plugins/gitdeploy
 LINK_WEB=$WEBUZO_ROOT/web/enduser/gitdeploy
 LINK_NGINX=$WEBUZO_ROOT/conf/webuzo/emps/enduser_locations_gitdeploy.conf
+# Admin panel (ports 2004/2005): the server owner's overview page.
+LINK_WEB_ADMIN=$WEBUZO_ROOT/web/admin/gitdeploy
+LINK_NGINX_ADMIN=$WEBUZO_ROOT/conf/webuzo/emps/admin_locations_gitdeploy.conf
 
 CRON_FILE=/etc/cron.d/gitdeploy
 LOGROTATE_FILE=/etc/logrotate.d/gitdeploy
@@ -154,10 +159,11 @@ set_mode 0644 "$ROOT/README.md"
 set_mode 0755 "$ROOT/install.sh"
 set_mode 0755 "$ROOT/uninstall.sh"
 
-# web/enduser/*.php are served through FPM — world-readable, never executable.
-if [[ -d "$ROOT/web/enduser" ]]; then
-	find "$ROOT/web/enduser" -maxdepth 1 -type f -name '*.php' -exec chmod 0644 {} +
-fi
+# web/*/*.php are served through FPM — world-readable, never executable.
+for wd in "$ROOT/web/enduser" "$ROOT/web/admin"; do
+	[[ -d "$wd" ]] || continue
+	find "$wd" -maxdepth 1 -type f -name '*.php' -exec chmod 0644 {} +
+done
 ok "ownership root:root; bin/build.sh 0755, bin/runner.php 0700, rest 0755/0644"
 
 # ---------------------------------------------------------- 4. state tree --
@@ -318,6 +324,8 @@ link_to() { # link_to <target> <linkname>
 link_to "$ROOT/webuzo/plugin"                          "$LINK_PLUGIN"
 link_to "$ROOT/web/enduser"                            "$LINK_WEB"
 link_to "$ROOT/webuzo/enduser_locations_gitdeploy.conf" "$LINK_NGINX"
+link_to "$ROOT/web/admin"                              "$LINK_WEB_ADMIN"
+link_to "$ROOT/webuzo/admin_locations_gitdeploy.conf"   "$LINK_NGINX_ADMIN"
 
 # --------------------------------------------------- 7. plugins.json entry -
 say "Registering plugin in $PLUGINS_JSON"
@@ -468,9 +476,13 @@ else
 	echo "--- nginx -t output ---" >&2
 	cat "$NGX_OUT" >&2
 	echo "-----------------------" >&2
-	rm -f "$NGX_OUT" "$LINK_NGINX"
-	die "nginx rejected the config. Our drop-in symlink has been REMOVED so the
-     panel keeps serving. Fix $ROOT/webuzo/enduser_locations_gitdeploy.conf
+	# Both of our drop-ins go, not just one: we cannot tell from here which of
+	# them nginx objected to, and a half-wired panel is worse than none.
+	rm -f "$NGX_OUT" "$LINK_NGINX" "$LINK_NGINX_ADMIN"
+	die "nginx rejected the config. BOTH of our drop-in symlinks have been REMOVED
+     so the panel keeps serving. Fix
+       $ROOT/webuzo/enduser_locations_gitdeploy.conf
+       $ROOT/webuzo/admin_locations_gitdeploy.conf
      and re-run install.sh."
 fi
 
@@ -523,7 +535,9 @@ $(printf '\033[1;32m==> GitDeploy %s installed (%s run complete).\033[0m' "$VERS
   State        $STATE                      (0711, per-site config + logs)
   Panel plugin $LINK_PLUGIN
   Panel UI     $LINK_WEB
+  Admin UI     $LINK_WEB_ADMIN
   nginx        $LINK_NGINX
+               $LINK_NGINX_ADMIN
   Registry     $PLUGINS_JSON               (key: $PLUGIN_KEY)
   Plans        features.$FEATURE_KEY = 1   (originals: *.gitdeploy.bak)
   Cron         $CRON_FILE                  (runner every minute)
@@ -532,6 +546,8 @@ $(printf '\033[1;32m==> GitDeploy %s installed (%s run complete).\033[0m' "$VERS
 
   Open it:     enduser panel -> Apps -> GitDeploy
                (the icon only appears for users whose plan has the feature)
+  Server view: admin panel (port 2004/2005) -> GitDeploy
+               (every account's deploys, disk use and a global pause switch)
 
   Sites currently configured: $SITE_COUNT
   Per-site config, build logs and deploy status all live under
