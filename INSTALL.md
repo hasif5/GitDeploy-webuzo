@@ -81,7 +81,7 @@ the copy, so the live tree stays free of repository metadata.
 
 ```bash
 sudo mkdir -p /usr/local/src
-sudo git clone <your-repository-url> /usr/local/src/gitdeploy
+sudo git clone https://github.com/hasif5/GitDeploy-webuzo.git /usr/local/src/gitdeploy
 sudo /usr/local/src/gitdeploy/install.sh
 ```
 

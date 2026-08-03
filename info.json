@@ -6,8 +6,8 @@
 	"requires": "4.0.0",
 	"compatibility": [],
 	"license": "Apache-2.0",
-	"download_url": "",
-	"download_link": "",
+	"download_url": "https:\/\/github.com\/hasif5\/GitDeploy-webuzo\/releases",
+	"download_link": "https:\/\/github.com\/hasif5\/GitDeploy-webuzo\/releases\/latest\/download\/gitdeploy-1.7.0.tar.gz",
 	"last_updated": "2026-08-03 03:00am GMT",
 	"homepage":"https:\/\/www.digitalbkk.com\/"
 }
