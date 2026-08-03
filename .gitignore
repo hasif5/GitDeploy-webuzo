@@ -1,0 +1,66 @@
+# GitDeploy — repository hygiene
+#
+# Powered by Digitalbkk Co., Ltd. (www.digitalbkk.com)
+#
+# This vendor tree doubles as the live install on a running server
+# (/usr/local/gitdeploy), so runtime droppings can appear here that must never
+# reach git. Everything below is either something the installer/runtime writes
+# into the tree, or an editor artefact.
+#
+# The authoritative "not source" list is install.sh's own stage-in rsync
+# excludes (.git/, .gitignore, *.tmp, *.swp, .DS_Store) — this file is a
+# superset of that.
+#
+# NOTE what is deliberately NOT ignored:
+#   conf/github_known_hosts  — shipped source. install.sh refreshes it in place
+#                              via ssh-keyscan and REFUSES to install if it is
+#                              missing or empty, so the pinned copy must be
+#                              committed. Expect it to show as modified after
+#                              each install run; that is normal.
+#   VERSION                  — shipped source, read by install.sh, check.sh,
+#                              the panel UI and packaging/make-release.sh.
+#   LICENSE, NOTICE          — Apache-2.0 requires both to travel with every
+#                              distributed copy. Never ignore them.
+
+# --- git / packaging -------------------------------------------------------
+.git/
+# Release artifacts, in case someone builds into the tree instead of outside it.
+gitdeploy-*.tar.gz
+gitdeploy-*.tar.gz.sha256
+gitdeploy-*.zip
+
+# --- installer / runtime temporaries ---------------------------------------
+# install.sh mktemp's conf/.github_known_hosts.XXXXXX before mv'ing it into
+# place; a crashed or interrupted run leaves the temp file behind.
+conf/.github_known_hosts.*
+# Generic atomic-write scratch names used across install.sh / uninstall.sh
+# (<file>.gitdeploy.tmp.<pid>, <file>.tmp.<pid>).
+*.tmp
+*.tmp.*
+*.gitdeploy.tmp.*
+
+# --- backups ---------------------------------------------------------------
+*.bak
+*.gitdeploy.bak
+*.orig
+*.rej
+*.pre-migration-*
+
+# --- editor / OS -----------------------------------------------------------
+*~
+*.swp
+*.swo
+.*.swp
+.*.swo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- guards ----------------------------------------------------------------
+# Nothing in this package is ever npm-installed here (builds run in a per-user
+# workspace under /home/<user>/.gitdeploy), but a developer poking at
+# bin/detect.js could create these locally.
+node_modules/
+package-lock.json
+npm-debug.log*

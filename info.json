@@ -1,0 +1,13 @@
+{
+	"name":"GitDeploy",
+	"slug":"gitdeploy",
+	"version":"1.6.0",
+	"author": "<a href=\"https:\/\/www.digitalbkk.com\">Digitalbkk Co., Ltd.<\/a>",
+	"requires": "4.0.0",
+	"compatibility": [],
+	"license": "Apache-2.0",
+	"download_url": "",
+	"download_link": "",
+	"last_updated": "2026-08-03 02:42am GMT",
+	"homepage":"https:\/\/www.digitalbkk.com\/"
+}

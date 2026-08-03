@@ -1,0 +1,175 @@
+/* GitDeploy — small overrides on top of the Webuzo enduser theme
+   (themes/default/bootstrap/css/bootstrap.min.css + themes/default/css/style.css).
+   Everything else comes from the panel's own stylesheets. */
+
+.gd-wrap{max-width:1180px;margin:0 auto;padding:22px 18px 56px}
+.gd-head h1.panel-head{font-size:20px}
+.gd-head img{border-radius:6px}
+.panel-heading{border-bottom:1px solid #eff2f7}
+
+/* the panel's flat buttons are styled for <button>; make links match */
+a.flat-butt,a.flat-butt-primary,a.flat-butt-dark,a.flat-butt-danger,a.flat-butt-warning,a.flat-butt-success{
+	display:inline-block;text-decoration:none}
+a.flat-butt:hover,a.flat-butt-primary:hover,a.flat-butt-danger:hover,a.flat-butt-warning:hover{text-decoration:none}
+.flat-butt-danger,.flat-butt-warning{border-color:rgba(0,0,0,.08)}
+.flat-butt.btn-sm,.flat-butt-primary.btn-sm,.flat-butt-danger.btn-sm,.flat-butt-warning.btn-sm{
+	padding:5px 12px;font-size:13px}
+.gd-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.gd-actions form{margin:0}
+.gd-iconbtn{padding-left:9px;padding-right:9px}
+.gd-cta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:22px}
+.gd-cta .hint{flex-basis:100%;margin-top:0}
+:focus-visible{outline:2px solid #4f46e5;outline-offset:2px}
+
+#versions{scroll-margin-top:14px}   /* "Versions" link target on the log page */
+
+/* status pill: colour + icon + word, never colour alone */
+.gd-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;
+	font-size:12px;font-weight:600;line-height:1.5;white-space:nowrap}
+.gd-pill i{font-size:11px}
+.gd-pill-ok{background:#e7f6ec;color:#1a7040}
+.gd-pill-fail{background:#fdeaea;color:#a92b2b}
+.gd-pill-warn{background:#fff3df;color:#8a6100}
+.gd-pill-run{background:#e8eaff;color:#3c40b8}
+.gd-pill-queue{background:#eaf3fb;color:#2f5d80}
+.gd-pill-idle{background:#f0f1f5;color:#5c6076}
+.gd-elapsed{font-weight:500;opacity:.9}
+.gd-tag{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:4px;
+	background:#f1f2f6;color:#5c6076;font-size:11.5px;font-weight:500;white-space:nowrap}
+.gd-step{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-right:9px;
+	border-radius:50%;background:#4f46e5;color:#fff;font-size:12.5px;font-weight:700;vertical-align:-3px}
+
+.gd-h3{margin:22px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#71758d;font-weight:600}
+.gd-note{font-size:13.5px;padding:10px 14px}
+.gd-note code{font-size:12.5px}
+.hint{color:#616161;font-size:12px;margin-top:4px}
+.hint.text-warning{color:#8a6100!important}   /* bootstrap's #ffc107 is unreadable on white */
+#gdstop{color:#8a6100}                        /* "log tailer stopped" note */
+.gd-sub{color:#71758d;font-size:12.5px;margin-top:2px}
+.gd-faint{color:#8b8fa3}
+.gd-dot{color:#c3c6d4;margin:0 2px}
+.gd-hr{margin:20px 0 16px;border-top:1px solid #eff2f7;opacity:1}
+.mono,code,.form-control.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;font-size:13px}
+.form-label{font-weight:500;font-size:13.5px;margin-bottom:4px}
+textarea.form-control.mono{font-size:13px;min-height:96px}
+.form-check-label{font-size:13.5px}
+.gd-confirm{margin-top:18px;padding:12px 14px;border:1px solid #eff2f7;border-radius:6px;background:#fafbfd}
+
+pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;font-size:12.5px;line-height:1.45;
+	background:#111820;color:#dbe4ee;padding:14px;border-radius:6px;overflow:auto;max-height:560px;margin:0}
+pre.plain{background:#f7f9fb;color:#1d1d1b;border:1px solid #dfdfdf;max-height:none;white-space:pre-wrap;word-break:break-all}
+.copy{position:relative;margin:6px 0 14px}
+.copy .gd-copybtn{position:absolute;top:8px;right:8px}
+.gd-logbar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-bottom:8px;font-size:12.5px;color:#616161}
+.gd-logbar-live{color:#3c40b8;font-weight:500}
+
+/* site list */
+.gd-sites{list-style:none;margin:0;padding:0}
+.gd-site{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-start;justify-content:space-between;
+	padding:16px 0;border-bottom:1px solid #eff2f7}
+.gd-site:first-child{padding-top:0}
+.gd-site:last-child{border-bottom:0;padding-bottom:0}
+.gd-site-main{flex:1 1 320px;min-width:0}
+.gd-site-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.gd-domain{font-size:16px;font-weight:600;color:#1d1d1b;text-decoration:none;word-break:break-all}
+.gd-domain:hover{color:#4f46e5;text-decoration:none}
+.gd-ext{font-size:10px;margin-left:6px;opacity:.45}
+.gd-site-when{color:#71758d;font-size:12.5px}
+.gd-site-meta{display:flex;flex-wrap:wrap;gap:2px 6px;align-items:center;margin-top:6px;
+	color:#71758d;font-size:12.5px;word-break:break-all}
+.gd-site-meta .mono{font-size:12.5px;color:#71758d}
+.gd-line{margin-top:7px;font-size:12.5px;line-height:1.5}
+.gd-line-err{color:#a92b2b}
+.gd-line-warn{color:#8a6100}
+.gd-line-muted{color:#71758d}
+.gd-site-actions{flex:0 0 auto;justify-content:flex-end}
+
+/* releases / rollback */
+.gd-rels{list-style:none;margin:0;padding:0}
+.gd-rel{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;
+	padding:12px 0;border-bottom:1px solid #eff2f7}
+.gd-rel:first-child{padding-top:0}
+.gd-rel:last-child{border-bottom:0;padding-bottom:0}
+.gd-rel-sha{font-weight:600;margin-right:8px}
+.gd-rel-act .hint{margin-top:0}
+
+/* deploy status header */
+.gd-status{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+.gd-status-pill .gd-pill{font-size:13px;padding:6px 14px}
+.gd-status-facts{flex:1 1 260px;color:#4a4f66;font-size:13.5px}
+.gd-status-side{color:#71758d;font-size:12.5px}
+.gd-status-side a{color:#4f46e5;text-decoration:none}
+
+/* onboarding / empty states */
+.gd-onboard{list-style:none;margin:4px 0 0;padding:0}
+.gd-onboard li{display:flex;gap:12px;align-items:flex-start;padding:9px 0}
+.gd-onboard-n{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+	border-radius:50%;background:#eef0ff;color:#3c40b8;font-size:13px;font-weight:700}
+.gd-onboard-p{margin-top:14px}
+.gd-summary{margin-top:18px;padding:14px 16px;border:1px solid #eff2f7;border-radius:8px;background:#fafbfd}
+.gd-summary-t{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#71758d;font-weight:600;margin-bottom:8px}
+.gd-summary p{font-size:12.5px;color:#616161;margin:0}
+.gd-empty{text-align:center;padding:26px 10px;color:#71758d}
+.gd-empty i{color:#c3c6d4}
+.gd-empty-t{font-size:15px;font-weight:600;color:#4a4f66;margin-bottom:6px}
+.gd-empty p{font-size:13px;max-width:44em;margin:0 auto}
+
+/* progressive disclosure: <details> styled as a panel toggle */
+.gd-more{margin-top:18px;border:1px solid #eff2f7;border-radius:8px;background:#fafbfd}
+.gd-more+.gd-more{margin-top:12px}
+.gd-more>summary{display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;cursor:pointer;list-style:none;
+	padding:12px 16px;border-radius:8px}
+.gd-more>summary::-webkit-details-marker{display:none}
+.gd-more>summary::before{content:"\f105";font-family:"Font Awesome 5 Free";font-weight:900;color:#8b8fa3;
+	width:12px;margin-right:2px}
+.gd-more[open]>summary::before{content:"\f107"}
+.gd-more>summary:hover .gd-more-t{color:#4f46e5}
+.gd-more-t{font-size:13.5px;font-weight:600;color:#1d1d1b}
+.gd-more-s{font-size:12.5px;color:#71758d}
+.gd-more-body{padding:2px 16px 16px;border-top:1px solid #eff2f7;margin-top:-1px;padding-top:16px}
+
+/* GitHub App: source toggle panes + read-only repository line */
+.gd-src{padding-bottom:2px}
+.gd-src .form-check-inline{margin-right:18px}
+.gd-ro{background:#f7f9fb;border:1px solid #dfdfdf;border-radius:5px;padding:8px 12px;word-break:break-all}
+
+.gd-steps{margin:8px 0 0 18px;padding:0;font-size:13.5px}
+.gd-steps li{margin:6px 0;line-height:1.55}
+.gd-logs{list-style:none;margin:0;padding:0;font-size:13px}
+.gd-logs li{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid #eff2f7}
+.gd-logs li:last-child{border-bottom:0}
+.gd-logs .cur{font-weight:700}
+.gd-logs .hint{margin-top:0}
+.gd-crumbs{margin-bottom:14px;font-size:13px;color:#616161}
+.gd-foot{color:#616161;font-size:12px;text-align:center;margin-top:4px}
+.gd-powered{color:#71758d;font-size:12px;text-align:center;margin-top:24px}
+.gd-powered a{color:#4f46e5;text-decoration:none;font-weight:600}
+/* the powered-by line stays visible even inside the panel iframe */
+.embedded .gd-powered{display:block;margin:14px 0 4px}
+
+@media(max-width:720px){
+	.gd-wrap{padding:14px 10px 40px}
+	.gd-site,.gd-rel{gap:8px}
+	.gd-site-actions,.gd-rel-act{flex-basis:100%;justify-content:flex-start}
+	.gd-status-side{flex-basis:100%}
+	.card-body.px-4{padding-left:1rem!important;padding-right:1rem!important}
+	.panel-heading.px-4{padding-left:1rem!important;padding-right:1rem!important}
+}
+
+/* Embedded inside the panel (act=gitdeploy iframe): the panel supplies the chrome.
+   Fully transparent so the panel's own background shows through and our
+   soft-cards sit flush like native panel cards — no double frame. */
+.embedded, .embedded body{background:transparent!important}
+.embedded body{overflow:hidden}
+.embedded .gd-brand{display:none}
+.embedded .gd-head{margin-bottom:12px!important;justify-content:flex-end}
+.embedded .gd-wrap{max-width:none;padding:0 0 8px;margin:0}
+.embedded .gd-foot{display:none}
+
+/* --- structural classes emitted by index.php that need explicit rules --- */
+.gd-nav{display:flex;gap:8px;flex-wrap:wrap}
+.gd-rel-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.gd-pane{margin-top:4px}
+/* No per-state stripe on site rows: the status pill (icon + word + colour) already
+   carries the state, and a flush left border crowded the text. gd-st-* stays as a
+   styling hook. Attention for problem states comes from the pill + inline error. */
