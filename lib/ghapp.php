@@ -3,9 +3,12 @@
  * GitDeploy — GitHub App integration helpers.
  * Pure PHP 7.4 + curl + openssl; no external libraries.
  *
- * Credentials (root-only, 0600): GD_STATE/ghapp.json
+ * Credentials, one app per hosting account (root-only, 0600): GD_STATE/ghapp-<user>.json
  *   {app_id, slug, name, owner, html_url, pem, webhook_secret, client_secret, created}
- * Webhook secret copy for hook.php (root:webuzo 0640): GD_HOOKINFO/.ghapp.json  {secret}
+ * Webhook secret copy for hook.php (root:webuzo 0640): GD_HOOKINFO/.ghapp-<user>.json  {secret}
+ *   hook.php tries every account's secret and only routes a push to the sites of
+ *   the account whose app signed it. GD_HOOKINFO/.ghapp.json is the pre-1.4 single
+ *   app's copy and is still honoured if present.
  * Manifest-flow state (root 0600, 10 min TTL): GD_STATE/.ghapp_state
  */
 

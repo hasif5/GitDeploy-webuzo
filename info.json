@@ -1,13 +1,13 @@
 {
 	"name":"GitDeploy",
 	"slug":"gitdeploy",
-	"version":"1.9.0",
+	"version":"1.9.1",
 	"author": "<a href=\"https:\/\/www.digitalbkk.com\">Digitalbkk Co., Ltd.<\/a>",
 	"requires": "4.0.0",
 	"compatibility": [],
 	"license": "Apache-2.0",
 	"download_url": "https:\/\/github.com\/hasif5\/GitDeploy-webuzo\/releases",
-	"download_link": "https:\/\/github.com\/hasif5\/GitDeploy-webuzo\/releases\/latest\/download\/gitdeploy-1.9.0.tar.gz",
-	"last_updated": "2026-10-31 14:00pm GMT",
+	"download_link": "https:\/\/github.com\/hasif5\/GitDeploy-webuzo\/releases\/latest\/download\/gitdeploy-1.9.1.tar.gz",
+	"last_updated": "2026-10-31 14:10pm GMT",
 	"homepage":"https:\/\/www.digitalbkk.com\/"
 }

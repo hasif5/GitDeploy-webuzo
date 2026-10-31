@@ -20,8 +20,23 @@ if(($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') gd_die(405, 'POST only');
  * site whose hookinfo declares that repo (gh_full_name) and branch.
  */
 if(($_GET['app'] ?? '') === '1'){
-	$app = gd_load_json(GD_HOOKINFO.'/.ghapp.json');
-	if(empty($app['secret'])) gd_die(404, 'app not configured');
+	/*
+	 * Each hosting account connects its OWN GitHub App (lib/ghapp.php keeps its
+	 * webhook-secret copy at hookinfo/.ghapp-<user>.json), and all of them post to
+	 * this one URL. Find the app whose secret signed this delivery; its account is
+	 * then the only one whose sites the push may queue. hookinfo/.ghapp.json is the
+	 * pre-per-account single app, still honoured (unrestricted, as it always was).
+	 */
+	$apps = array();
+	foreach(glob(GD_HOOKINFO.'/.ghapp-*.json') ?: [] as $f){
+		$u = substr(basename($f, '.json'), strlen('.ghapp-'));
+		if(!gd_valid_user($u)) continue;
+		$j = gd_load_json($f);
+		if(!empty($j['secret']) && is_string($j['secret'])) $apps[] = array('user' => $u, 'secret' => $j['secret']);
+	}
+	$legacy = gd_load_json(GD_HOOKINFO.'/.ghapp.json');
+	if(!empty($legacy['secret']) && is_string($legacy['secret'])) $apps[] = array('user' => null, 'secret' => $legacy['secret']);
+	if(!$apps) gd_die(404, 'app not configured');
 
 	// 10MB cap (nginx enforces the same): pushes with many commits carry big payloads,
 	// and a truncated read would break the HMAC and reject a legitimate deploy.
@@ -29,7 +44,11 @@ if(($_GET['app'] ?? '') === '1'){
 	if($raw === false || $raw === '') gd_die(400, 'empty body');
 
 	$sig = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
-	if(!hash_equals('sha256='.hash_hmac('sha256', $raw, $app['secret']), $sig)) gd_die(403, 'bad signature');
+	$owner = false;   // false = no app matched; null = legacy app (any account)
+	foreach($apps as $a){
+		if(hash_equals('sha256='.hash_hmac('sha256', $raw, $a['secret']), (string)$sig)){ $owner = $a['user']; break; }
+	}
+	if($owner === false) gd_die(403, 'bad signature');
 
 	$event = $_SERVER['HTTP_X_GITHUB_EVENT'] ?? '';
 	if($event === 'ping') die("pong\n");
@@ -50,6 +69,8 @@ if(($_GET['app'] ?? '') === '1'){
 		if($b === '' || $b[0] === '.') continue;
 		$info = gd_load_json($f);
 		if(!is_array($info) || empty($info['gh_full_name'])) continue;
+		// an account's app only ever deploys that account's own sites
+		if($owner !== null && ($info['user'] ?? '') !== $owner) continue;
 		// match by immutable repo id when we have it (survives renames), else by name
 		$id_match   = $rid !== '' && !empty($info['gh_repo_id']) && (string)$info['gh_repo_id'] === $rid;
 		$name_match = strcasecmp($info['gh_full_name'], $full) === 0;

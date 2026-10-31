@@ -15,6 +15,26 @@ uses semantic versioning.
 
 ---
 
+## [1.9.1] — 2026-10-31
+
+### Fixed
+
+- **GitHub App push webhooks were rejected with "bad signature".** Since GitHub
+  App credentials became per-account (`ghapp-<user>.json`, webhook-secret copy
+  `hookinfo/.ghapp-<user>.json`), `hook.php` kept verifying deliveries against the
+  old single-app file `hookinfo/.ghapp.json`, so no App push ever queued a deploy.
+  It now verifies against every account's app secret and routes the push only to
+  sites owned by the account whose app signed it; the legacy file is still
+  honoured when present.
+
+### Notes
+
+- GitHub verifies TLS on webhook deliveries. If the panel port (2003) still
+  serves Webuzo's self-signed certificate for the server hostname, deliveries fail
+  with `x509: certificate is not valid for any names`. Install a valid certificate
+  for the hostname, or point the App's webhook URL at a domain on this server whose
+  certificate is valid (`https://<domain>:2003/gitdeploy/hook.php?app=1`).
+
 ## [1.9.0] — 2026-10-31
 
 ### Added
