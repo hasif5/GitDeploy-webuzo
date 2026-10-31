@@ -51,6 +51,17 @@ DEPLOY_MODE="${GD_DEPLOY_MODE:-build}"
 case "$DEPLOY_MODE" in build|pull) ;; *) echo "FATAL: unknown deploy mode"; exit 10;; esac
 readonly PUBLISH_ROOT PUBLISH_HOME DEPLOY_MODE
 
+# A website folder that is itself a git checkout is being deployed some other way
+# (someone runs "git pull" in it). Two tools writing one folder fight each other,
+# and a build-mode mirror would delete the .git folder outright. Refuse both.
+if [ -e "$PUBLISH_ROOT/.git" ] || [ -L "$PUBLISH_ROOT/.git" ]; then
+	echo "FATAL: the website folder contains a .git folder — it is already a git checkout."
+	echo "       GitDeploy will not write into it: deploying there with git as well would conflict,"
+	echo "       and a .git folder inside a website can expose your source code to visitors."
+	echo "       Move it out of the website folder (e.g. mv $PUBLISH_ROOT/.git ~/old-site.git) and deploy again."
+	exit 10
+fi
+
 # Env names that must never be imported from a repo or from panel env settings.
 gd_env_blocked(){
 	case "$1" in
@@ -85,6 +96,145 @@ gd_prune_releases(){
 # .env, config the app writes for itself) was never ours and is never touched.
 PULL_LIST="$WORK/published.list"
 
+# ------------------------------------------------- panel-managed .env (optional)
+# Files-only sites can have the panel's environment variables written into the
+# website folder's .env. Only a marked block is ours; every other line in the
+# file (keys added by hand on the server) is kept exactly as it is.
+DOTENV_BEGIN='# >>> GitDeploy managed — edit these in the GitDeploy panel; changes made here are overwritten on deploy'
+DOTENV_END='# <<< GitDeploy managed'
+
+# Quote a value the way a person would write it, so parse_ini_file() and
+# vlucas/phpdotenv both read it back unchanged (verified against both).
+gd_env_quote(){
+	local v="$1"
+	if [[ "$v" =~ ^[A-Za-z0-9_./:@+,-]*$ ]]; then printf '%s' "$v"
+	elif [[ "$v" != *"'"* ]]; then printf "'%s'" "$v"
+	else v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '"%s"' "$v"; fi
+}
+
+# The managed variables as sorted "KEY<TAB>VALUE" lines.
+gd_dotenv_vars(){
+	local line k
+	while IFS= read -r line; do
+		k=${line%%=*}; k=${k#GD_ENV_}
+		[[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+		printf '%s\t%s\n' "$k" "$(printenv "GD_ENV_$k")"
+	done < <(env | grep -E '^GD_ENV_[A-Za-z_][A-Za-z0-9_]*=' | sort || true)
+}
+
+# Variable names assigned in a .env file (stdin), one per line, in file order.
+# Understands "KEY=", "KEY =", "export KEY=", leading spaces and CRLF endings.
+gd_env_file_keys(){
+	awk '{ line = $0; sub(/\r$/, "", line); sub(/^[ \t]*(export[ \t]+)?/, "", line)
+		if(match(line, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*=/)){ k = substr(line, 1, RLENGTH); sub(/[ \t]*=$/, "", k); print k } }'
+}
+
+# Write/update the managed block of $PUBLISH_ROOT/.env. $1 = backup dir for the
+# old file; $2 = "dry" to only report. Values are never printed — names only.
+gd_write_dotenv(){
+	[ "${GD_DOTENV:-}" = 1 ] || return 0
+	local bdir="$1" dry="${2:-}" f="$PUBLISH_ROOT/.env" tmp newf='' keys='' k v line oldblock
+	local -a added=() changed=() removed=() adopted=()
+	if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then
+		echo "FATAL: .env in the website folder is a symlink or not a regular file — refusing to write through it"
+		exit 11
+	fi
+	while IFS=$'\t' read -r k v; do
+		if [[ "$v" == *"'"* && "$v" == *'${'* ]]; then
+			echo "   WARN: .env: $k skipped — its value contains both ' and \${, which .env readers cannot store safely"
+			continue
+		fi
+		keys+="$k"$'\n'
+		newf+="$k=$(gd_env_quote "$v")"$'\n'
+	done < <(gd_dotenv_vars)
+	# nothing to manage and no file yet: do not create an empty .env
+	[ -z "$keys" ] && [ ! -f "$f" ] && return 0
+
+	# Old managed block (KEY=line per key) and the lines outside it.
+	oldblock=$(awk -v b="$DOTENV_BEGIN" -v e="$DOTENV_END" '{ sub(/\r$/, "") } $0==b{inb=1; next} $0==e{inb=0; next} inb' "$f" 2>/dev/null || true)
+	# staged in the private work dir (same filesystem), so a crash never leaves
+	# a stray copy of the secrets inside the website folder
+	tmp=$(mktemp "$WORK/.env.gitdeploy.XXXXXX")
+	# Keep everything outside our block, minus hand-written lines for a key the
+	# panel now manages (a duplicate key means two readers could disagree).
+	if [ -f "$f" ]; then
+		awk -v b="$DOTENV_BEGIN" -v e="$DOTENV_END" -v keys="$keys" '
+			BEGIN { n = split(keys, a, "\n"); for(i = 1; i <= n; i++) if(a[i] != "") m[a[i]] = 1 }
+			{ line = $0; sub(/\r$/, "", line) }
+			line == b { inb = 1; next }
+			line == e { inb = 0; next }
+			inb { next }
+			{ k = line; sub(/^[ \t]*(export[ \t]+)?/, "", k); if(match(k, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*=/)){ k = substr(k, 1, RLENGTH); sub(/[ \t]*=$/, "", k); if(k in m){ print k > "/dev/stderr"; next } } }
+			{ print $0 }' "$f" > "$tmp" 2> "$tmp.adopted"
+		while IFS= read -r k; do [ -n "$k" ] && adopted+=("$k"); done < "$tmp.adopted"
+		rm -f "$tmp.adopted"
+		# drop trailing blank lines so the block does not drift down the file
+		sed -i -e ':a' -e '/^\n*$/{$d;N;ba' -e '}' "$tmp"
+	fi
+	# Duplicate checks on what is being kept. A name assigned twice is read
+	# differently by different .env readers (parse_ini_file keeps the LAST value,
+	# phpdotenv the FIRST), so say so loudly — but leave the owner's lines alone:
+	# the site works with them today and guessing which one is meant could break it.
+	local handkeys dup
+	handkeys=$(gd_env_file_keys < "$tmp")
+	dup=$(sort <<< "$handkeys" | uniq -d | grep . | tr '\n' ' ' || true)
+	[ -n "$dup" ] && echo "   WARN: .env: set more than once in the lines you wrote by hand: ${dup}— different PHP libraries pick different values; remove the extra line(s)"
+	# Same name in different case is a different variable to PHP — likely a typo.
+	while IFS= read -r k; do
+		[ -n "$k" ] || continue
+		dup=$(grep -ixF -- "$k" <<< "$handkeys" | grep -vxF -- "$k" | sort -u | tr '\n' ' ' || true)
+		[ -n "$dup" ] && echo "   WARN: .env: the panel sets $k and a hand-written line sets ${dup}— these are two different variables; check the spelling"
+	done <<< "$keys"
+
+	if [ -n "$keys" ]; then
+		[ -s "$tmp" ] && echo >> "$tmp"
+		{ echo "$DOTENV_BEGIN"; printf '%s' "$newf"; echo "$DOTENV_END"; } >> "$tmp"
+	fi
+
+	while IFS= read -r k; do
+		[ -n "$k" ] || continue
+		line=$(grep -m1 -E "^$k=" <<< "$newf" || true)
+		if ! grep -qE "^$k=" <<< "$oldblock"; then added+=("$k")
+		elif [ "$(grep -m1 -E "^$k=" <<< "$oldblock")" != "$line" ]; then changed+=("$k"); fi
+	done <<< "$keys"
+	while IFS= read -r line; do
+		k=${line%%=*}; [ -n "$k" ] || continue
+		grep -qxF "$k" <<< "$keys" || removed+=("$k")
+	done <<< "$oldblock"
+
+	# Last line of defence: no name the panel manages may appear twice in the file
+	# about to be installed. If it does, keep the current .env and stop.
+	dup=$(gd_env_file_keys < "$tmp" | sort | uniq -d | grep -xF -f <(grep . <<< "$keys") | tr '\n' ' ' || true)
+	if [ -n "$dup" ]; then
+		rm -f "$tmp"
+		echo "FATAL: .env: would contain $dup more than once — the current .env was left untouched and nothing was deployed"
+		exit 11
+	fi
+	if [ -f "$f" ] && cmp -s "$tmp" "$f"; then
+		rm -f "$tmp"
+		echo "== .env: up to date ($(grep -c . <<< "$keys" || true) variable(s) managed by the panel)"
+		return 0
+	fi
+	if [ "$dry" = dry ]; then
+		rm -f "$tmp"
+		echo "== .env: would be $([ -f "$f" ] && echo updated || echo created) with $(grep -c . <<< "$keys" || true) variable(s) from the panel"
+	else
+		if [ -f "$f" ]; then
+			mkdir -p "$bdir" && cp -p -- "$f" "$bdir/.env" && chmod 600 "$bdir/.env"
+			chmod --reference="$f" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+		else
+			chmod 600 "$tmp"
+		fi
+		mv -f -- "$tmp" "$f"
+		echo "== .env: $([ -n "$oldblock$(cat "$bdir/.env" 2>/dev/null | head -c1)" ] && echo updated || echo created) from the panel ($(grep -c . <<< "$keys" || true) variable(s), values not shown)"
+	fi
+	[ ${#added[@]}   -gt 0 ] && echo "   added:   ${added[*]}"
+	[ ${#changed[@]} -gt 0 ] && echo "   changed: ${changed[*]}"
+	[ ${#removed[@]} -gt 0 ] && echo "   removed: ${removed[*]} (no longer set in the panel)"
+	[ ${#adopted[@]} -gt 0 ] && echo "   now managed by the panel (the hand-written line was replaced): ${adopted[*]}"
+	return 0
+}
+
 # Publish release dir $1 into the website folder with git-pull semantics:
 #  - files the repository tracks are added or updated (never mirrored with --delete);
 #  - files we published last time that the repository no longer has are removed,
@@ -108,16 +258,38 @@ gd_pull_publish(){
 	[ -n "$prev_sha" ] && [ -d "$WORK/releases/$prev_sha" ] && prev_rel="$WORK/releases/$prev_sha"
 
 	echo "== Publishing to $PUBLISH_ROOT (files only — nothing outside the repository is touched)"
-	local out="$WORK/.publish.out" rc=0 n
-	# The repository wins for files it tracks, but say so when that replaces an
-	# edit someone made on the server since the last deploy (it would be lost).
-	if [ -n "$prev_rel" ]; then
-		rsync -rlcn --out-format='%n' "$prev_rel"/ "$PUBLISH_ROOT"/ 2>/dev/null | grep -v '/$' \
-		| while IFS= read -r f; do
-			p="$PUBLISH_ROOT/$f"
-			{ [ -f "$p" ] && [ ! -L "$p" ] && [ -f "$rel/$f" ]; } || continue
-			cmp -s -- "$p" "$rel/$f" || echo "   WARN: $f was changed on the server — replaced with the repository's version"
-		done || true
+	local out="$WORK/.publish.out" rc=0 n bdir nb=0
+	# The repository wins for files it tracks. Before a live file is replaced, keep
+	# a copy of it in ~/.gitdeploy/<site>/backups/<time>/ — unless it is exactly
+	# what the previous deploy published (that copy already sits in its release).
+	# So: every live file a deploy overwrites is recoverable, whoever made it.
+	bdir="$WORK/backups/$(date -u +%Y%m%d-%H%M%S)-$$"   # pid: two deploys in one second never share a folder
+	# .env first, so new code never runs before the settings it expects exist
+	gd_write_dotenv "$bdir"
+	while IFS= read -r f; do
+		p="$PUBLISH_ROOT/$f"
+		{ [ -f "$p" ] || [ -L "$p" ]; } || continue
+		parent=$(dirname -- "$p")
+		real=$(cd -- "$parent" 2>/dev/null && pwd -P) || continue
+		case "$real/" in "$PUBLISH_ROOT"/*) ;; *) continue;; esac
+		if [ -n "$prev_rel" ]; then
+			if [ -L "$p" ]; then
+				[ -L "$prev_rel/$f" ] && [ "$(readlink -- "$p")" = "$(readlink -- "$prev_rel/$f")" ] && continue
+			elif [ -f "$prev_rel/$f" ] && [ ! -L "$prev_rel/$f" ] && cmp -s -- "$p" "$prev_rel/$f"; then
+				continue
+			fi
+			echo "   WARN: $f was changed on the server — replaced with the repository's version (old copy backed up)"
+		fi
+		mkdir -p -- "$bdir/$(dirname -- "$f")"
+		cp -P --preserve=mode,timestamps -- "$p" "$bdir/$f" && nb=$((nb + 1))
+	done < <(rsync -rlcn --out-format='%n' "$rel"/ "$PUBLISH_ROOT"/ 2>/dev/null | grep -v '/$' || true)
+	if [ "$nb" -gt 0 ]; then
+		echo "   backed up $nb live file(s) before replacing them: ~/.gitdeploy/$GD_SITE/backups/${bdir##*/}/"
+		# keep the 10 most recent backups
+		ls -1t "$WORK/backups" 2>/dev/null | tail -n +11 | while IFS= read -r old; do
+			case "$old" in ''|*/*|.*) continue;; esac
+			rm -rf -- "$WORK/backups/$old"
+		done
 	fi
 	rsync -rlc --out-format='%n' "$rel"/ "$PUBLISH_ROOT"/ > "$out" || rc=$?
 	n=$(grep -cv '/$' "$out" || true)
@@ -217,6 +389,64 @@ if [ "$DEPLOY_MODE" = pull ]; then
 	fi
 	echo "== Files only: no build step, publishing the repository as it is"
 
+	# Copy the repository's tracked files into $1. Never shipped: git/CI tooling,
+	# and paths that belong to the server (.env holds the live secrets;
+	# .well-known/cgi-bin are the panel's). Filtered from the list itself because
+	# rsync refuses --exclude'd names inside --files-from. Extra args go to rsync.
+	gd_pull_stage(){
+		local dest="$1"; shift
+		git -C "$SRC" ls-files -z --recurse-submodules \
+		| { grep -zvE '^(\.git(/|$)|\.github/|\.gitdeploy\.json$|\.gitignore$|\.gitattributes$|\.gitmodules$|\.env$|\.well-known/|cgi-bin/)' || true; } \
+		| rsync -rlc --from0 --files-from=- "$@" "$SRC"/ "$dest"/
+	}
+
+	# First files-only deploy into a folder that already holds a site: change
+	# nothing, report exactly what WOULD happen, and wait for the owner's OK in the
+	# panel (which re-queues the job with GD_CONFIRM_SHA = this commit). A newer
+	# push in between means a new preview, so what gets deployed is what was read.
+	if [ ! -f "$PULL_LIST" ] && [ "${GD_CONFIRM_SHA:-}" != "$SHA" ] \
+		&& [ -n "$(find "$PUBLISH_ROOT" -mindepth 1 -maxdepth 1 ! -name .well-known ! -name cgi-bin -print -quit)" ]; then
+		PV="$WORK/preview"
+		rm -rf "$PV"; mkdir -p "$PV"
+		gd_pull_stage "$PV"
+		( cd "$PV" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\0' ) | sort -z > "$WORK/.pv.repo"
+		( cd "$PUBLISH_ROOT" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\0' ) | sort -z > "$WORK/.pv.live"
+		ADD=$(comm -z -23 "$WORK/.pv.repo" "$WORK/.pv.live" | tr '\0' '\n')
+		REPL=''; SAME=0
+		while IFS= read -r -d '' f; do
+			if [ ! -L "$PUBLISH_ROOT/$f" ] && [ ! -L "$PV/$f" ] && cmp -s -- "$PUBLISH_ROOT/$f" "$PV/$f"; then SAME=$((SAME + 1))
+			else REPL+="$f"$'\n'; fi
+		done < <(comm -z -12 "$WORK/.pv.repo" "$WORK/.pv.live")
+		NADD=$(printf '%s' "$ADD" | grep -c . || true); NREPL=$(printf '%s' "$REPL" | grep -c . || true)
+		echo
+		echo "== FIRST DEPLOY PREVIEW — nothing has been changed yet"
+		echo "   The website folder already holds a site. This is what deploying commit ${SHA:0:7} would do:"
+		echo
+		echo "== Will be ADDED from the repository: $NADD file(s)"
+		printf '%s' "$ADD" | head -n 300 | sed 's/^/   + /' || true
+		[ "$NADD" -gt 300 ] && echo "   ... and $((NADD - 300)) more"
+		echo
+		echo "== Will be REPLACED with the repository's version: $NREPL file(s) (each live copy is backed up first)"
+		printf '%s' "$REPL" | head -n 300 | sed 's/^/   ~ /' || true
+		[ "$NREPL" -gt 300 ] && echo "   ... and $((NREPL - 300)) more"
+		echo
+		echo "== Already identical: $SAME file(s)"
+		echo
+		echo "== Will be LEFT ALONE (in the website folder, not in the repository):"
+		comm -z -13 "$WORK/.pv.repo" "$WORK/.pv.live" | tr '\0' '\n' \
+			| grep -vE '^(\.well-known|cgi-bin)/' \
+			| awk -F/ '{ print (NF > 1 ? $1 "/" : $0) }' | sort | uniq -c | sort -rn | head -n 60 \
+			| awk '{ n=$1; $1=""; printf "   = %s%s\n", substr($0,2), (n > 1 ? "  (" n " files)" : "") }' || true
+		echo
+		gd_write_dotenv "" dry
+		echo
+		echo "== Nothing is deleted on a first deploy."
+		echo "   If this looks right, press \"Looks right — deploy\" on the GitDeploy page for this site."
+		rm -rf "$PV" "$WORK/.pv.repo" "$WORK/.pv.live"
+		echo "$SHA" > "$WORK/review_sha"
+		exit 20
+	fi
+
 	# Stage the tracked files as a release (also what rollback republishes).
 	# Unchanged files are hard-linked to the previous release so five releases of
 	# a large PHP project do not cost five full copies of disk.
@@ -226,16 +456,12 @@ if [ "$DEPLOY_MODE" = pull ]; then
 	LINK_DEST=()
 	PREV=$(cat "$WORK/last_ok_sha" 2>/dev/null || true)
 	case "$PREV" in *[!0-9a-f]*|"") ;; *) [ -d "$WORK/releases/$PREV" ] && [ "$PREV" != "$SHA" ] && LINK_DEST=(--link-dest="$WORK/releases/$PREV");; esac
-	# Never shipped from the repository: git/CI tooling, and paths that belong to
-	# the server (.env holds the live secrets; .well-known/cgi-bin are the panel's).
-	# (Filtered from the list itself: rsync refuses --exclude'd names in --files-from.)
-	git -C "$SRC" ls-files -z --recurse-submodules \
-	| { grep -zvE '^(\.git(/|$)|\.github/|\.gitdeploy\.json$|\.gitignore$|\.gitattributes$|\.gitmodules$|\.env$|\.well-known/|cgi-bin/)' || true; } \
-	| rsync -rlc --from0 --files-from=- "${LINK_DEST[@]}" "$SRC"/ "$REL.new"/
+	gd_pull_stage "$REL.new" "${LINK_DEST[@]}"
 	rm -rf "$REL"
 	mv "$REL.new" "$REL"
 
 	gd_pull_publish "$REL"
+	rm -f "$WORK/review_sha"
 	echo "$SHA" > "$WORK/last_ok_sha"
 	gd_prune_releases "$SHA"
 

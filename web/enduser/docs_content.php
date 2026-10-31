@@ -171,9 +171,40 @@ files-only sites, as your hosting user, for up to 10 minutes &mdash; for example
 <code>php artisan migrate --force</code>. Its failure is reported but never undoes the deploy.</p>
 <p><strong>Rollback</strong> works the same as for built sites: every deploy is kept (the last five), and
 rolling back applies the same rules &mdash; your uploads and <code>.env</code> are never touched.</p>
-<p><strong>Already have a live site in that folder?</strong> The first files-only deploy only adds and updates
-files from the repository; it deletes nothing. From then on, only files that came from the repository are
-ever removed.</p>
+<p><strong>Already have a live site in that folder?</strong> Then the first files-only deploy is a
+<strong>preview</strong>: it changes nothing and lists every file it would add, replace or leave alone, and the
+site shows <em>Waiting for your OK</em>. Read the list on the deploy log page and press <strong>Looks right &mdash;
+deploy</strong>. Even then nothing is deleted; from then on, only files that came from the repository are ever removed.</p>
+<p><strong>Backups.</strong> Whenever a deploy replaces a live file that is not exactly what the previous deploy
+published (the first deploy, or a file someone edited on the server), the old copy is saved first in
+<code>~/.gitdeploy/&lt;site&gt;/backups/&lt;date-time&gt;/</code> in your account. The newest 10 backups are kept.</p>
+<p><strong>Config files with live passwords</strong> (database name, user, password) must not be tracked with
+development values, or every deploy replaces the live ones. Read them from <code>.env</code> instead &mdash; GitDeploy
+never touches it &mdash; or stop tracking the file (<code>git rm --cached</code> plus a <code>.gitignore</code> line) and
+keep the live copy only on the server.</p>
+<p><strong>Settings from the panel into <code>.env</code> (optional).</strong> Under <em>Advanced</em>, tick
+<em>also write these into the website&rsquo;s .env file</em> and the environment variables you enter in the panel are
+written into <code>.env</code> on every deploy &mdash; handy for database passwords and API keys that must never be in
+the repository. GitDeploy only owns a marked block at the end of the file:</p>
+<pre class="plain">MANUAL_KEY=you-added-this-by-hand      &larr; kept as it is
+
+# &gt;&gt;&gt; GitDeploy managed &mdash; edit these in the GitDeploy panel; changes made here are overwritten on deploy
+DB_NAME=hasif_shop
+DB_PASS='s3cret pass'
+# &lt;&lt;&lt; GitDeploy managed</pre>
+<ul>
+<li>Lines outside the block stay. If a hand-written line sets a key the panel also sets, the panel wins and that line is removed.</li>
+<li>Remove a variable in the panel and it disappears from <code>.env</code> on the next deploy; untick the box and the file is left alone.</li>
+<li><strong>Duplicate names are caught.</strong> The panel will not save the same name twice, or two names that differ only in
+upper/lower case. At deploy time the log warns about names your hand-written lines set more than once (PHP libraries disagree on
+which value wins) and about spelling clashes such as <code>db_name</code> vs <code>DB_NAME</code>, and a <code>.env</code> in which
+a panel-managed name would appear twice is never installed.</li>
+<li>Panel changes apply on the <strong>next deploy</strong> &mdash; press <em>Deploy now</em> after saving.</li>
+<li>The file is written before any code, so new code never runs without the settings it expects. It is readable only by your
+account (the web server cannot serve it), the previous copy is backed up, and deploy logs show key names, never values.</li>
+</ul>
+<p><strong>A <code>.git</code> folder inside the website folder</strong> means the site is already deployed with git by
+hand. GitDeploy refuses to deploy there until it is moved out.</p>
 </div>
 </div>
 

@@ -205,6 +205,7 @@ function gd_state_key($st, $queued = false){
 	if($state === 'building' && gd_stalled($st)) return 'stalled';
 	if($state === 'building') return 'building';
 	if($queued) return 'queued';
+	if($state === 'review')  return 'review';
 	if($state === 'success') return 'live';
 	if($state === 'failed')  return 'failed';
 	return 'none';
@@ -216,6 +217,7 @@ function gd_badge($st, $queued = false){
 		'stalled'  => array('gd-pill-warn',  'fa-exclamation-triangle', 'Stalled'),
 		'building' => array('gd-pill-run',   'fa-circle-notch fa-spin', 'Building'),
 		'queued'   => array('gd-pill-queue', 'fa-clock',                'Queued'),
+		'review'   => array('gd-pill-warn',  'fa-eye',                  'Waiting for owner OK'),
 		'live'     => array('gd-pill-ok',    'fa-check-circle',         'Live'),
 		'failed'   => array('gd-pill-fail',  'fa-times-circle',         'Failed'),
 		'none'     => array('gd-pill-idle',  'fa-minus-circle',         'Never deployed'),
@@ -471,7 +473,7 @@ if($act === 'log' && !$is_post){
 /* ------------------------------------------------------------------ overview */
 
 $rows = array();
-$counts = array('live' => 0, 'failed' => 0, 'building' => 0, 'queued' => 0, 'stalled' => 0, 'none' => 0);
+$counts = array('live' => 0, 'failed' => 0, 'building' => 0, 'queued' => 0, 'stalled' => 0, 'review' => 0, 'none' => 0);
 $anybusy = false;
 
 foreach($scope['sites'] as $site => $cfg){
@@ -488,7 +490,7 @@ foreach($scope['sites'] as $site => $cfg){
 
 // Problems first, then whatever is moving, then everything that is simply fine.
 // Within a group the most recent activity comes first.
-$rank = array('failed' => 0, 'stalled' => 1, 'building' => 2, 'queued' => 3, 'none' => 4, 'live' => 5);
+$rank = array('failed' => 0, 'stalled' => 1, 'review' => 2, 'building' => 3, 'queued' => 4, 'none' => 5, 'live' => 6);
 usort($rows, function($a, $b) use ($rank){
 	if($rank[$a['key']] !== $rank[$b['key']]) return $rank[$a['key']] - $rank[$b['key']];
 	if($a['last'] !== $b['last']) return $b['last'] - $a['last'];

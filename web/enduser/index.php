@@ -193,6 +193,7 @@ function gd_state_key($st, $queued = false){
 	if($state === 'building' && gd_stalled($st)) return 'stalled';
 	if($state === 'building') return 'building';
 	if($queued) return 'queued';
+	if($state === 'review')  return 'review';
 	if($state === 'success') return 'live';
 	if($state === 'failed')  return 'failed';
 	return 'none';
@@ -205,6 +206,7 @@ function gd_badge($st, $queued = false, $ticker = false){
 		'stalled'  => array('gd-pill-warn',  'fa-exclamation-triangle', 'Stalled'),
 		'building' => array('gd-pill-run',   'fa-circle-notch fa-spin', 'Building'),
 		'queued'   => array('gd-pill-queue', 'fa-clock',                'Queued'),
+		'review'   => array('gd-pill-warn',  'fa-eye',                  'Waiting for your OK'),
 		'live'     => array('gd-pill-ok',    'fa-check-circle',         'Live'),
 		'failed'   => array('gd-pill-fail',  'fa-times-circle',         'Failed'),
 		'none'     => array('gd-pill-idle',  'fa-minus-circle',         'Never deployed'),
@@ -542,7 +544,7 @@ function gd_check_build_cmd($cmd, &$err){
 
 // "KEY=VALUE" per line -> map. Keys ^[A-Za-z_][A-Za-z0-9_]*$, values <=500 chars, single line.
 function gd_parse_env($text, &$err){
-	$map = array();
+	$map = array(); $seen = array(); $seenci = array();
 	$lines = preg_split('~\r\n|\r|\n~', (string)$text);
 	foreach($lines as $i => $line){
 		$line = trim($line);
@@ -558,6 +560,21 @@ function gd_parse_env($text, &$err){
 		}
 		if(strlen($v) > 500){ $err = 'Environment variable '.$k.': value is longer than 500 characters.'; return null; }
 		if(preg_match('~[\x00-\x1f\x7f]~', $v)){ $err = 'Environment variable '.$k.': value must be a single line.'; return null; }
+		// The same name twice would silently keep only the last value, and two
+		// names differing only in case are two different variables to PHP — both
+		// are almost always a typo that breaks the site, so refuse them.
+		if(isset($seen[$k])){
+			$err = 'Environment variable '.$k.' is listed twice (lines '.$seen[$k].' and '.($i + 1).'). Keep only one.';
+			return null;
+		}
+		$lk = strtolower($k);
+		if(isset($seenci[$lk])){
+			$err = 'Environment variables '.$seenci[$lk][0].' (line '.$seenci[$lk][1].') and '.$k.' (line '.($i + 1).') differ only '
+				.'in upper/lower case. PHP treats them as two different variables — keep one spelling.';
+			return null;
+		}
+		$seen[$k] = $i + 1;
+		$seenci[$lk] = array($k, $i + 1);
 		$map[$k] = $v;
 	}
 	if(count($map) > 100){ $err = 'Too many environment variables (max 100).'; return null; }
@@ -782,6 +799,16 @@ function gd_deploy_form($site, $sm = false){
 		.'<i class="fas fa-rocket me-1"></i>Deploy'.($sm ? '' : ' now').'</button></form>';
 }
 
+// "Looks right — deploy": confirms the previewed first files-only deploy of one commit.
+function gd_confirm_form($site, $sha, $sm = false){
+	echo '<form class="d-inline" method="post" action="?act=deploy">';
+	gd_tok_field();
+	echo '<input type="hidden" name="site" value="'.h($site).'">'
+		.'<input type="hidden" name="confirm_sha" value="'.h($sha).'">'
+		.'<button class="flat-butt'.($sm ? ' btn-sm' : '').'" type="submit">'
+		.'<i class="fas fa-check me-1"></i>Looks right — deploy '.h(substr($sha, 0, 7)).'</button></form>';
+}
+
 /**
  * "Refresh repositories" — drops this user's cached GitHub repo listing and comes
  * back to $to. POST + CSRF, because it changes server-side state.
@@ -957,16 +984,36 @@ function gd_build_fields($f, $repo_hint, $repo_block = null, $branch_block = nul
 		.'b.addEventListener("change",sync);p.addEventListener("change",sync);sync();})();</script>';
 
 	/* --- Advanced: environment variables, after-deploy command and (optionally) notifications --- */
-	$open_adv = (trim((string)$f['env']) !== '')
+	$open_adv = (trim((string)$f['env']) !== '') || !empty($f['env_to_dotenv'])
 		|| (trim((string)$f['post_cmd']) !== '')
 		|| ($with_notify && isset($f['notify_email']) && trim((string)$f['notify_email']) !== '');
 	gd_more_open('Advanced', $with_notify ? 'Environment variables, after-deploy command and email notifications'
 		: 'Environment variables and after-deploy command', $open_adv);
 	echo '<label class="form-label" for="env">Environment variables (optional)</label>'
 		.'<textarea class="form-control mono" name="env" id="env" rows="4" placeholder="VITE_API_URL=https://api.example.com">'.h($f['env']).'</textarea>'
-		.'<div class="hint">Values your build needs, one <code>KEY=VALUE</code> per line. Names may use letters, digits and '
-		.'underscores; each value is a single line of up to 500 characters. Lines starting with <code>#</code> are notes and '
-		.'are kept exactly as you type them.</div>'
+		.'<div class="hint"><strong>By default these exist only while a deploy runs &mdash; your live website does not see them.</strong> '
+		.'They are handed to the install, the build command and the after-deploy command while a deploy runs, '
+		.'e.g. <code>VITE_API_URL=https://api.example.com</code>, which a Vite build bakes into the public JavaScript '
+		.'(so never put a secret in a value the build bakes in). <strong>Files-only (PHP) sites</strong> have no build, so '
+		.'only the after-deploy command sees them &mdash; unless you tick the box below, which writes them into the site&rsquo;s '
+		.'<code>.env</code> file for your PHP code to read.</div>'
+		.'<div class="hint">One <code>KEY=VALUE</code> per line. Names may use letters, digits and underscores; each value is '
+		.'a single line of up to 500 characters. Lines starting with <code>#</code> are notes and are kept exactly as you '
+		.'type them.</div>'
+		.'<div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="env_to_dotenv" id="env_to_dotenv" value="yes"'
+		.(!empty($f['env_to_dotenv']) ? ' checked' : '').'>'
+		.'<label class="form-check-label" for="env_to_dotenv"><strong>Files-only (PHP) sites: also write these into the website&rsquo;s '
+		.'<code>.env</code> file</strong></label></div>'
+		.'<div class="hint">On every deploy the variables above are written into a marked block at the end of <code>.env</code> in the '
+		.'website folder (the file is created if it does not exist). <ul class="mb-0">'
+		.'<li>Lines you added to <code>.env</code> yourself, outside that block, are kept as they are. If one of them sets a key '
+		.'that is also listed here, the value from here wins and the hand-written line is removed.</li>'
+		.'<li>Remove a variable here and it is removed from <code>.env</code> on the next deploy. Untick this box and '
+		.'<code>.env</code> is simply left as it is from then on.</li>'
+		.'<li>Changes made here are applied on the <strong>next deploy</strong> &mdash; press <em>Deploy now</em> after saving.</li>'
+		.'<li>A <code>.env</code> in your repository is never used. The previous <code>.env</code> is backed up before each change, '
+		.'the file is only readable by your account (so the web server cannot serve it), and values never appear in deploy logs.</li>'
+		.'</ul></div>'
 		.'<label class="form-label mt-3" for="post_cmd">After-deploy command (optional)</label>'
 		.'<input type="text" class="form-control mono" name="post_cmd" id="post_cmd" maxlength="300" value="'.h($f['post_cmd']).'">'
 		.'<div class="hint">Runs after the site is published — for example to clear a cache. It runs as your user and cannot '
@@ -1151,8 +1198,20 @@ if($is_post){
 	if($act === 'deploy'){
 		$site = gd_post('site');
 		gd_require_site($site, $user);
-		if(!gd_queue_job($site, 'manual')) gd_stop('Queue failed', 'Could not write the job to the spool directory.', 500);
-		gd_redirect('?act=list&msg=queued');
+		// "Looks right — deploy": the posted commit must be the one the runner actually
+		// previewed (status review_sha), never just whatever the browser sends.
+		$extra = array();
+		$csha  = gd_post('confirm_sha');
+		if($csha !== ''){
+			$st = gd_status($site);
+			$rsha = isset($st['review_sha']) ? (string)$st['review_sha'] : '';
+			if(!preg_match('~^[0-9a-f]{40}$~', $csha) || $rsha === '' || !hash_equals($rsha, $csha)){
+				gd_stop('Preview out of date', 'A newer preview exists for '.$site.'. Open its deploy log, read the new preview and confirm again.', 409);
+			}
+			$extra['confirm_sha'] = $csha;
+		}
+		if(!gd_queue_job($site, 'manual', $extra)) gd_stop('Queue failed', 'Could not write the job to the spool directory.', 500);
+		gd_redirect($csha !== '' ? '?act=log&site='.rawurlencode($site) : '?act=list&msg=queued');
 
 	}elseif($act === 'rollback'){
 		$site = gd_post('site');
@@ -1268,6 +1327,7 @@ if($is_post){
 			'notify_on'    => gd_post('notify_on'),
 			'ack'          => (gd_post('ack_shared') === 'yes'),
 			'deploy_mode'  => gd_post('deploy_mode'),
+			'env_to_dotenv'=> (gd_post('env_to_dotenv') === 'yes'),
 			'ack_mode'     => (gd_post('ack_mode') === 'yes'),
 			'was_pull'     => ($editing && gd_site_mode($cfg) === 'pull'),
 		);
@@ -1347,6 +1407,13 @@ if($is_post){
 
 		$e = ''; $env = gd_parse_env($form['env'], $e);
 		if($env === null) $errors[] = $e;
+		if($env !== null && $form['env_to_dotenv']){
+			foreach($env as $k => $v){
+				if(strpos((string)$v, "'") !== false && strpos((string)$v, '${') !== false){
+					$errors[] = 'Environment variable '.$k.': a value written to .env cannot contain both \' and ${ — change one of them.';
+				}
+			}
+		}
 
 		$warn = gd_risk_warning($user, $site);
 		if($warn === null){
@@ -1388,6 +1455,7 @@ if($is_post){
 				'repo'                 => $form['repo'],
 				'branch'               => $form['branch'],
 				'deploy_mode'          => $form['deploy_mode'],
+				'env_to_dotenv'        => (bool)$form['env_to_dotenv'],
 				'build_cmd'            => $form['build_cmd'],
 				'output_dir'           => $form['output_dir'],
 				'root_dir'             => $form['root_dir'],
@@ -1549,6 +1617,11 @@ if($view === 'list' || $view === 'deploy'){
 			if($key === 'stalled'){
 				echo '<div class="gd-line gd-line-warn"><i class="fas fa-exclamation-triangle me-1" aria-hidden="true"></i>'
 					.'This build never reported a result. Deploy again to retry.</div>';
+			}
+			if($key === 'review'){
+				echo '<div class="gd-line gd-line-warn"><i class="fas fa-eye me-1" aria-hidden="true"></i>'
+					.'First deploy into a folder that already has a site — nothing was changed yet. '
+					.'<a href="?act=log&amp;site='.h(rawurlencode($s)).'">Read the preview and confirm</a></div>';
 			}
 			if($key === 'none'){
 				echo '<div class="gd-line gd-line-muted">Not published yet — press <strong>Deploy</strong> to build it for the first time.</div>';
@@ -1748,7 +1821,7 @@ if($view === 'add'){
 		// build_cmd/output_dir start empty: empty is the recommended "detect it" setting
 		'repo' => '', 'gh_repo' => '', 'source' => '', 'branch' => 'main', 'build_cmd' => '',
 		'output_dir' => '', 'root_dir' => '', 'node_version' => '', 'post_cmd' => '', 'env' => '',
-		'notify_email' => '', 'notify_on' => 'fail', 'ack' => false, 'deploy_mode' => 'build',
+		'notify_email' => '', 'notify_on' => 'fail', 'ack' => false, 'deploy_mode' => 'build', 'env_to_dotenv' => false,
 	), $form);
 
 	// GitHub App repository picker (only when an app is connected)
@@ -2017,6 +2090,9 @@ if($view === 'added'){
 			.'<tr><th>Published from</th><td class="mono">'
 			.h(isset($cfg['root_dir']) && trim((string)$cfg['root_dir']) !== '' ? $cfg['root_dir'].'/' : 'the whole repository')
 			.' &rarr; '.h($site).'</td></tr>'
+			.'<tr><th>.env</th><td>'.(!empty($cfg['env_to_dotenv'])
+				? 'written from the panel&rsquo;s environment variables on every deploy'
+				: 'left alone (never copied from the repository)').'</td></tr>'
 			// empty = detected at build time, so say that rather than showing a blank row
 			: '<tr><th>Build command</th><td class="mono">'
 			.h(isset($cfg['build_cmd']) && trim((string)$cfg['build_cmd']) !== '' ? $cfg['build_cmd'] : 'auto').'</td></tr>'
@@ -2101,6 +2177,18 @@ if($view === 'log'){
 	if($busy) gd_note('<i class="fas fa-sync-alt me-1"></i>'
 		.($building ? 'Building right now — the output below updates as it runs.'
 			: 'Queued — the build starts in a few seconds and the output appears here.'));
+	$rsha = isset($st['review_sha']) ? (string)$st['review_sha'] : '';
+	if($key === 'review'){
+		gd_note('<i class="fas fa-eye me-1"></i><strong>Nothing has been changed yet.</strong> The website folder already holds '
+			.'a site, so this first deploy was run as a preview. The output below lists every file that would be '
+			.'<strong>added</strong>, every file that would be <strong>replaced</strong> (each live copy is backed up first) '
+			.'and what is <strong>left alone</strong>. Nothing is deleted on a first deploy. If it looks right, confirm it.', 'warn');
+		if(preg_match('~^[0-9a-f]{40}$~', $rsha)){
+			echo '<div class="gd-cta mt-0">';
+			gd_confirm_form($site, $rsha);
+			echo '</div>';
+		}
+	}
 	if(!$logs && !$busy && empty($st['error'])){
 		echo '<div class="hint">This site has not been deployed yet. Press <strong>Deploy</strong> below to publish it '
 			.'for the first time.</div>';
@@ -2196,7 +2284,7 @@ function step(){
 		if(d.reset){ p.textContent=d.data||""; bottom(); }
 		else if(d.data){ p.textContent+=d.data; bottom(); }
 		if(d.state==="stalled"){ stop("This build stopped reporting"); return; }
-		var done=(d.state==="success"||d.state==="failed");
+		var done=(d.state==="success"||d.state==="failed"||d.state==="review");
 		if(mode==="queued"){ if(done||d.state==="building"){ location.reload(); return; } }
 		else if(done){ if(last){ location.reload(); return; }
 			last=true; setTimeout(step,400); return; }   /* one final poll, then reload */
@@ -2233,6 +2321,7 @@ if($view === 'edit'){
 		'ack'          => !empty($cfg['allow_shared_docroot']),
 		'deploy_mode'  => gd_site_mode($cfg),
 		'was_pull'     => (gd_site_mode($cfg) === 'pull'),
+		'env_to_dotenv'=> !empty($cfg['env_to_dotenv']),
 	), $form);
 
 	$warn = gd_risk_warning($user, $site);

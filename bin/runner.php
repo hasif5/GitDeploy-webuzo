@@ -243,6 +243,8 @@ function gd_deploy($site, $job){
 		'PATH' => '/usr/local/bin:/usr/bin:/bin',
 		'GD_SITE' => $site, 'GD_REPO' => $cfg['repo'], 'GD_BRANCH' => $cfg['branch'],
 		'GD_DEPLOY_MODE' => gd_site_mode($cfg),
+		// files-only sites may have the panel env written into the site's .env
+		'GD_DOTENV' => (gd_site_mode($cfg) === 'pull' && !empty($cfg['env_to_dotenv'])) ? '1' : '',
 		// Verbatim, empty included: empty means "work it out from the repository", and
 		// only build.sh can see the repository, so it is the one that decides.
 		'GD_BUILD_CMD' => isset($cfg['build_cmd']) ? (string)$cfg['build_cmd'] : '',
@@ -252,6 +254,11 @@ function gd_deploy($site, $job){
 		'GD_NODE_VERSION' => isset($cfg['node_version']) ? (string)$cfg['node_version'] : '',
 		'GD_POST_CMD' => isset($cfg['post_cmd']) ? (string)$cfg['post_cmd'] : '',
 	];
+	// Owner's OK for a first files-only deploy previewed earlier: the exact commit
+	// they read. build.sh deploys only if the fetched commit is still that one.
+	if(isset($job['confirm_sha']) && preg_match('~^[0-9a-f]{40}$~', (string)$job['confirm_sha'])){
+		$env['GD_CONFIRM_SHA'] = (string)$job['confirm_sha'];
+	}
 	foreach(($cfg['env'] ?? []) as $k => $v){
 		if(preg_match('~^[A-Za-z_][A-Za-z0-9_]*$~', $k)) $env['GD_ENV_'.$k] = (string)$v;
 	}
@@ -321,6 +328,19 @@ function gd_deploy($site, $job){
 	fclose($log);
 
 	$patch = ['state' => $code === 0 ? 'success' : 'failed', 'exit' => $code, 'finished' => time()];
+	// Exit 20 = first files-only deploy into a folder that already holds a site:
+	// nothing was changed, the log is a preview, and the owner must confirm it.
+	$review_file = $pw['dir'].'/.gitdeploy/'.$site.'/review_sha';
+	if($code === 20){
+		$patch['state'] = 'review';
+		$patch['review_sha'] = null;
+		if(!is_link($review_file) && is_file($review_file)){
+			$rsha = trim((string)file_get_contents($review_file, false, null, 0, 100));
+			if(preg_match('~^[0-9a-f]{40}$~', $rsha)) $patch['review_sha'] = $rsha;
+		}
+	}else{
+		$patch['review_sha'] = null;
+	}
 	// the site user owns this path, so refuse symlinks: root must not be tricked
 	// into reading an arbitrary root-readable file through one
 	$sha_file = $pw['dir'].'/.gitdeploy/'.$site.'/last_ok_sha';
@@ -335,15 +355,17 @@ function gd_deploy($site, $job){
 	$email = isset($cfg['notify_email']) ? $cfg['notify_email'] : '';
 	$when  = isset($cfg['notify_on']) ? $cfg['notify_on'] : 'fail';
 	if($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) && $when !== 'never'
-		&& ($patch['state'] === 'failed' || $when === 'always')){
+		&& ($patch['state'] !== 'success' || $when === 'always')){
 		gd_notify($email, $site, $patch, $logpath);
 	}
 }
 
 function gd_notify($email, $site, $patch, $logpath){
 	$ok = $patch['state'] === 'success';
+	$review = $patch['state'] === 'review';
 	$host = php_uname('n');
-	$subject = '[GitDeploy] '.$site.' — deploy '.($ok ? 'succeeded' : 'FAILED');
+	$subject = '[GitDeploy] '.$site.' — '.($review ? 'first deploy is waiting for your OK'
+		: 'deploy '.($ok ? 'succeeded' : 'FAILED'));
 
 	$body = 'Site:     '.$site."\n"
 		.'Result:   '.$patch['state'].(isset($patch['exit']) ? ' (exit '.$patch['exit'].')' : '')."\n"
@@ -359,6 +381,11 @@ function gd_notify($email, $site, $patch, $logpath){
 			fclose($fh);
 			$body .= "--- last lines of the deploy log ---\n".$tail."\n";
 		}
+	}
+	if($review){
+		$body = "Nothing has been changed yet. The website folder of ".$site." already holds a site, so\n"
+			."GitDeploy previewed what the first deploy would add and replace (below) and is waiting\n"
+			."for you to confirm it: enduser panel -> Apps -> GitDeploy -> ".$site." -> Looks right — deploy.\n\n".$body;
 	}
 	$body .= "\nFull logs: enduser panel -> Apps -> GitDeploy -> Logs\n";
 

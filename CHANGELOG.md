@@ -15,6 +15,57 @@ uses semantic versioning.
 
 ---
 
+## [1.9.0] — 2026-10-31
+
+### Added
+
+- **First-deploy preview for files-only sites.** When the website folder already
+  holds a site and has never received a files-only deploy, the first deploy
+  changes nothing: it lists every file that would be added, replaced (each with
+  its live copy backed up) or left alone, and ends in a new **"Waiting for your
+  OK"** state (build.sh exit 20, status `review` + `review_sha`). The owner
+  confirms with **"Looks right — deploy <sha>"**; the confirmation is bound to
+  that exact commit, so a newer push in between produces a fresh preview instead
+  of deploying unread changes. Notification email is sent for previews too.
+- **Automatic backups.** Before a files-only deploy replaces a live file that is
+  not exactly what the previous deploy published (first deploys, server-side
+  edits), the live copy is saved to `~/.gitdeploy/<site>/backups/<time>/`
+  (newest 10 kept; one folder per deploy). Combined with releases, every
+  overwritten file is recoverable.
+
+- **Optional panel-managed `.env` for files-only sites** ("also write these into
+  the website's `.env` file" under Advanced; `env_to_dotenv: true`). On every
+  deploy, before any code is copied, the panel's environment variables are
+  written into a marked block at the end of `.env` (created 0600 if missing;
+  existing mode kept). Lines outside the block are preserved; a hand-written line
+  for a key the panel now manages is replaced. Keys removed in the panel are
+  removed from the file; unticking leaves the file alone. Values are quoted so
+  `parse_ini_file()` and vlucas/phpdotenv both read them back unchanged
+  (verified); a value containing both `'` and `${` is refused. The old `.env` is
+  backed up, staging happens in the private work dir, a symlinked `.env` aborts
+  the deploy before anything is published, and logs show key names only. The
+  first-deploy preview reports the `.env` change without making it.
+- **Duplicate-name checks for environment variables.** The panel refuses a name
+  listed twice (it used to keep the last value silently) or two names differing
+  only in case, with the line numbers. When writing `.env`: a hand-written line
+  for a managed key is replaced (any `KEY=`, `KEY =`, `export KEY=` form); names
+  set twice in the hand-written lines and case-only clashes with panel keys are
+  reported by name but not changed (`parse_ini_file` keeps the last value,
+  phpdotenv the first); and a final scan refuses to install a `.env` in which a
+  managed name appears twice, leaving the current file untouched.
+
+### Safety
+
+- Deploys (both modes, and rollbacks) **refuse a website folder that contains
+  `.git`**: it is already deployed with git by hand, the two would conflict, and
+  a build-mode mirror would delete it.
+
+### Changed
+
+- The environment-variables hint now states plainly that these values exist only
+  while a deploy runs, never for the live site, and points PHP sites at `.env`
+  / `SetEnv`.
+
 ## [1.8.0] — 2026-10-31
 
 ### Added
