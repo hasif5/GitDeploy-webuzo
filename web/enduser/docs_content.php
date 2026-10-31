@@ -142,6 +142,43 @@ site's own settings page &mdash; the one above is just the shape of it, using th
 
 <div class="card soft-card mb-4">
 <div class="row align-items-center panel-heading px-4 py-3"><div class="col-12">
+<label class="panel-head d-inline-block mb-0"><i class="fab fa-php panel-icon"></i>PHP sites: files-only deploys</label>
+</div></div>
+<div class="card-body px-4 py-4">
+<p>A PHP site (WordPress theme or plugin repo, Laravel, a hand-written PHP site&hellip;) needs no build:
+the files in the repository <em>are</em> the site. Choose <strong>Deploy type &rarr; Files only (PHP, no
+build)</strong> when you connect the site, or later in its settings. Every push then updates the website
+folder the way <code>git pull</code> would &mdash; within seconds, with no Node and no build step.</p>
+<ul>
+<li><strong>Added or changed in the repository</strong> &rarr; copied into the website folder.</li>
+<li><strong>Deleted from the repository</strong> &rarr; removed from the website folder too, but only if it
+is still exactly the file GitDeploy put there. If someone edited it on the server, it is left in place and
+the deploy log says so.</li>
+<li><strong>Not in the repository at all</strong> &rarr; never touched. Uploads, <code>vendor/</code>,
+caches, logs, config files the application writes for itself all stay as they are. List them in
+<code>.gitignore</code> and they are safe.</li>
+<li><strong><code>.env</code></strong> is never copied from the repository, so the live one on the server is
+always kept. <strong><code>.htaccess</code></strong> is updated when the repository has one, and never deleted.</li>
+<li><strong>The <code>.git</code> folder</strong> never goes into the website folder: the repository is
+checked out in your account&rsquo;s private <code>~/.gitdeploy</code> folder and only its files are copied.</li>
+<li>Edits made <strong>on the server</strong> to a file the repository also has are replaced by the
+repository&rsquo;s version on the next deploy (the log names each one). The repository is the source of truth.</li>
+</ul>
+<p><strong>Publish only this folder</strong> &mdash; when only part of the repository belongs in the website
+folder, e.g. <code>public</code>, type it here. Leave it empty to publish the whole repository.</p>
+<p><strong>After-deploy command</strong> (under Advanced) runs <em>inside the website folder</em> for
+files-only sites, as your hosting user, for up to 10 minutes &mdash; for example
+<code>php artisan migrate --force</code>. Its failure is reported but never undoes the deploy.</p>
+<p><strong>Rollback</strong> works the same as for built sites: every deploy is kept (the last five), and
+rolling back applies the same rules &mdash; your uploads and <code>.env</code> are never touched.</p>
+<p><strong>Already have a live site in that folder?</strong> The first files-only deploy only adds and updates
+files from the repository; it deletes nothing. From then on, only files that came from the repository are
+ever removed.</p>
+</div>
+</div>
+
+<div class="card soft-card mb-4">
+<div class="row align-items-center panel-heading px-4 py-3"><div class="col-12">
 <label class="panel-head d-inline-block mb-0"><i class="fas fa-hammer panel-icon"></i>Build settings explained</label>
 </div></div>
 <div class="card-body px-4 py-4">

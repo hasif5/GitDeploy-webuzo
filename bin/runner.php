@@ -242,6 +242,7 @@ function gd_deploy($site, $job){
 		'HOME' => $pw['dir'], 'USER' => $cfg['user'], 'LOGNAME' => $cfg['user'],
 		'PATH' => '/usr/local/bin:/usr/bin:/bin',
 		'GD_SITE' => $site, 'GD_REPO' => $cfg['repo'], 'GD_BRANCH' => $cfg['branch'],
+		'GD_DEPLOY_MODE' => gd_site_mode($cfg),
 		// Verbatim, empty included: empty means "work it out from the repository", and
 		// only build.sh can see the repository, so it is the one that decides.
 		'GD_BUILD_CMD' => isset($cfg['build_cmd']) ? (string)$cfg['build_cmd'] : '',

@@ -140,6 +140,13 @@ function gd_build_secs($st){
 }
 
 // "owner/repo" for display; falls back to the stored string unchanged.
+// "build: npm run build" / "build: auto" / "files only" for the one-line site summaries
+function gd_mode_label($cfg){
+	if(gd_site_mode($cfg) === 'pull') return 'files only (no build)';
+	$b = isset($cfg['build_cmd']) ? trim((string)$cfg['build_cmd']) : '';
+	return 'build: '.($b !== '' ? $b : 'auto');
+}
+
 function gd_short_repo($repo){
 	$r = (string)$repo;
 	if(preg_match('~^https://github\.com/(.+?)(?:\.git)?/?$~', $r, $m)) return $m[1];
@@ -864,13 +871,56 @@ function gd_build_fields($f, $repo_hint, $repo_block = null, $branch_block = nul
 	}
 	echo '</div></div>';
 
+	/* --- Deploy type: build (Node) or files only (PHP / served straight from source) --- */
+	$mode = (isset($f['deploy_mode']) && $f['deploy_mode'] === 'pull') ? 'pull' : 'build';
+	echo '<label class="form-label mt-3">Deploy type</label><div class="gd-src">'
+		.'<div class="form-check"><input class="form-check-input" type="radio" name="deploy_mode" id="dm_build" value="build"'
+		.($mode === 'build' ? ' checked' : '').'>'
+		.'<label class="form-check-label" for="dm_build"><i class="fab fa-node-js me-1"></i><strong>Build the site</strong> '
+		.'&mdash; React, Vue, Vite, Astro, Hugo, plain HTML&hellip; The website folder becomes an exact copy of the build '
+		.'output: anything else in it is deleted.</label></div>'
+		.'<div class="form-check"><input class="form-check-input" type="radio" name="deploy_mode" id="dm_pull" value="pull"'
+		.($mode === 'pull' ? ' checked' : '').'>'
+		.'<label class="form-check-label" for="dm_pull"><i class="fab fa-php me-1"></i><strong>Files only (PHP, no build)</strong> '
+		.'&mdash; like <code>git pull</code>: on every push the files in your repository are copied into the website folder '
+		.'as they are. Uploads, caches, <code>.env</code> and anything else not in the repository are never touched.</label></div>'
+		.'</div>';
+	if(!empty($f['was_pull'])){
+		// switching an existing files-only site to build mode would mirror-delete its uploads
+		echo '<div id="gd_mode_ack" class="mt-2"'.($mode === 'build' ? '' : ' style="display:none"').'>';
+		gd_note('<i class="fas fa-exclamation-triangle me-1"></i>This site currently deploys <strong>files only</strong>. '
+			.'Switching it to <strong>Build the site</strong> makes the next deploy <strong>delete everything in the website '
+			.'folder that the build does not produce</strong> &mdash; uploads, caches, <code>.env</code>, config files.', 'warn');
+		echo '<div class="form-check"><input class="form-check-input" type="checkbox" name="ack_mode" id="ack_mode" value="yes"'
+			.(!empty($f['ack_mode']) ? ' checked' : '').'>'
+			.'<label class="form-check-label" for="ack_mode">I understand &mdash; switch to build mode anyway</label></div></div>';
+	}
+
+	echo '<div id="gd_mode_pull"'.($mode === 'pull' ? '' : ' style="display:none"').'>';
+	gd_more_open('Files-only settings', 'Publish only part of the repository', trim((string)$f['root_dir']) !== '' && $mode === 'pull');
+	echo '<label class="form-label" for="pull_dir">Publish only this folder (optional)</label>'
+		.'<input type="text" class="form-control mono" name="pull_dir" id="pull_dir" maxlength="100" value="'.h($f['root_dir']).'" placeholder="public">'
+		.'<div class="hint">Leave empty to publish the whole repository. Set it when only one folder of the repository '
+		.'belongs in the website folder, e.g. <code>public</code>.</div>'
+		.'<div class="hint mt-2"><strong>How files-only deploys work</strong><ul class="mb-0">'
+		.'<li>Files your repository tracks are added or updated. When a file is deleted from the repository it is removed '
+		.'from the website too &mdash; unless someone changed it on the server, then it is left in place and the deploy log says so.</li>'
+		.'<li>Files that are not in the repository (<code>.gitignore</code>d uploads, <code>vendor/</code>, caches) are '
+		.'never touched. <code>.env</code> is never copied from the repository, so the live one is always kept. '
+		.'<code>.htaccess</code> is updated when the repository has one, never deleted.</li>'
+		.'<li>The <code>.git</code> folder is never put in the website folder.</li>'
+		.'<li>Need a step after the files land (a database migration, clearing a cache)? Put it in <em>After-deploy command</em> under Advanced '
+		.'&mdash; for files-only sites it runs inside the website folder.</li></ul></div>';
+	gd_more_end();
+	echo '</div><div id="gd_mode_build"'.($mode === 'build' ? '' : ' style="display:none"').'>';
+
 	/* --- Build settings: empty means "detect it", which is the normal case, so stay
 	       folded unless this site has actually overridden something --- */
 	$bc = trim((string)$f['build_cmd']);
 	$od = trim((string)$f['output_dir']);
 	$rd = trim((string)$f['root_dir']);
 	$nv = isset($f['node_version']) ? trim((string)$f['node_version']) : '';
-	$open_build = ($bc !== '' || $od !== '' || $rd !== '' || $nv !== '');
+	$open_build = ($bc !== '' || $od !== '' || $rd !== '' || $nv !== '') && $mode === 'build';
 	gd_more_open('Build settings', 'Project folder (monorepos), build command, output folder, Node version', $open_build);
 	echo '<label class="form-label" for="root_dir">Project folder (optional)</label>'
 		.'<input type="text" class="form-control mono" name="root_dir" id="root_dir" maxlength="100" value="'.h($f['root_dir']).'" placeholder="apps/website">'
@@ -897,6 +947,14 @@ function gd_build_fields($f, $repo_hint, $repo_block = null, $branch_block = nul
 	gd_repoconf_hint();
 	echo '<div class="hint">Need help? See the <a href="?act=docs">Help page</a></div>';
 	gd_more_end();
+	echo '</div>';   // #gd_mode_build
+	echo '<script>(function(){var b=document.getElementById("dm_build"),p=document.getElementById("dm_pull");'
+		.'if(!b||!p)return;function sync(){var pull=p.checked;'
+		.'document.getElementById("gd_mode_pull").style.display=pull?"":"none";'
+		.'document.getElementById("gd_mode_build").style.display=pull?"none":"";'
+		.'var a=document.getElementById("gd_mode_ack");if(a){a.style.display=pull?"none":"";'
+		.'document.getElementById("ack_mode").required=!pull;}}'
+		.'b.addEventListener("change",sync);p.addEventListener("change",sync);sync();})();</script>';
 
 	/* --- Advanced: environment variables, after-deploy command and (optionally) notifications --- */
 	$open_adv = (trim((string)$f['env']) !== '')
@@ -911,8 +969,9 @@ function gd_build_fields($f, $repo_hint, $repo_block = null, $branch_block = nul
 		.'are kept exactly as you type them.</div>'
 		.'<label class="form-label mt-3" for="post_cmd">After-deploy command (optional)</label>'
 		.'<input type="text" class="form-control mono" name="post_cmd" id="post_cmd" maxlength="300" value="'.h($f['post_cmd']).'">'
-		.'<div class="hint">Runs after the site is published — for example to clear a cache. It runs in your project folder '
-		.'as your user and cannot fail the deploy.</div>';
+		.'<div class="hint">Runs after the site is published — for example to clear a cache. It runs as your user and cannot '
+		.'fail the deploy. <strong>Build</strong> sites: it runs in your project folder. <strong>Files-only</strong> sites: it '
+		.'runs inside the website folder, so e.g. <code>php artisan migrate --force</code> works (up to 10 minutes).</div>';
 	if($with_notify){
 		echo '<hr class="gd-hr">';
 		gd_notify_fields(isset($f['notify_email']) ? $f['notify_email'] : '', isset($f['notify_on']) ? $f['notify_on'] : 'fail');
@@ -1208,8 +1267,19 @@ if($is_post){
 			'notify_email' => trim(gd_post('notify_email')),
 			'notify_on'    => gd_post('notify_on'),
 			'ack'          => (gd_post('ack_shared') === 'yes'),
+			'deploy_mode'  => gd_post('deploy_mode'),
+			'ack_mode'     => (gd_post('ack_mode') === 'yes'),
+			'was_pull'     => ($editing && gd_site_mode($cfg) === 'pull'),
 		);
 		if(!gd_valid_notify_on($form['notify_on'])) $form['notify_on'] = 'fail';
+		if(!gd_valid_deploy_mode($form['deploy_mode'])) $form['deploy_mode'] = 'build';
+		// Files-only sites have their own "publish only this folder" field; it is
+		// stored as root_dir, which build.sh reads as the folder to publish.
+		if($form['deploy_mode'] === 'pull') $form['root_dir'] = trim(gd_post('pull_dir'));
+		if($form['was_pull'] && $form['deploy_mode'] === 'build' && !$form['ack_mode']){
+			$errors[] = 'Switching this site from files only to build mode deletes everything in the website folder that '
+				.'the build does not produce (uploads, caches, .env). Tick the box to confirm.';
+		}
 
 		/**
 		 * GitHub App sites. The posted repository is never trusted: it is looked up
@@ -1256,7 +1326,9 @@ if($is_post){
 			$errors[] = 'Output folder must be a relative path inside the repo, e.g. dist — leave it empty to have it detected.';
 		}
 		if(!gd_valid_root_dir($form['root_dir'])){
-			$errors[] = 'Project folder must be a relative path inside the repo, e.g. apps/website — leave it empty unless this is a monorepo.';
+			$errors[] = ($form['deploy_mode'] === 'pull')
+				? 'Publish folder must be a relative path inside the repo, e.g. public — leave it empty to publish the whole repository.'
+				: 'Project folder must be a relative path inside the repo, e.g. apps/website — leave it empty unless this is a monorepo.';
 		}
 		if(!gd_valid_node_version($form['node_version'])){
 			$errors[] = 'Node version must be a version number such as 22, 22.11 or 18.20.4 — leave it empty to use the version your repository asks for.';
@@ -1315,6 +1387,7 @@ if($is_post){
 				'user'                 => $user,
 				'repo'                 => $form['repo'],
 				'branch'               => $form['branch'],
+				'deploy_mode'          => $form['deploy_mode'],
 				'build_cmd'            => $form['build_cmd'],
 				'output_dir'           => $form['output_dir'],
 				'root_dir'             => $form['root_dir'],
@@ -1460,8 +1533,7 @@ if($view === 'list' || $view === 'deploy'){
 				.h($c['branch']).'</span>';
 			$rdir = isset($c['root_dir']) ? trim((string)$c['root_dir']) : '';
 			if($rdir !== '') echo '<span class="gd-dot">&middot;</span><span class="mono">folder: '.h($rdir).'</span>';
-			$bcmd = isset($c['build_cmd']) ? trim((string)$c['build_cmd']) : '';
-			echo '<span class="gd-dot">&middot;</span><span class="mono">build: '.h($bcmd !== '' ? $bcmd : 'auto').'</span>';
+			echo '<span class="gd-dot">&middot;</span><span class="mono">'.h(gd_mode_label($c)).'</span>';
 			if($sha !== '') echo '<span class="gd-dot">&middot;</span><span class="mono">'.h($sha).'</span>';
 			echo '<span class="gd-dot">&middot;</span>'.gd_source_tag($c)
 				.'</div>';
@@ -1676,7 +1748,7 @@ if($view === 'add'){
 		// build_cmd/output_dir start empty: empty is the recommended "detect it" setting
 		'repo' => '', 'gh_repo' => '', 'source' => '', 'branch' => 'main', 'build_cmd' => '',
 		'output_dir' => '', 'root_dir' => '', 'node_version' => '', 'post_cmd' => '', 'env' => '',
-		'notify_email' => '', 'notify_on' => 'fail', 'ack' => false,
+		'notify_email' => '', 'notify_on' => 'fail', 'ack' => false, 'deploy_mode' => 'build',
 	), $form);
 
 	// GitHub App repository picker (only when an app is connected)
@@ -1940,12 +2012,17 @@ if($view === 'added'){
 	echo '<div class="table-responsive"><table class="table webuzo-table mb-0">'
 		.'<tr><th>Repository</th><td class="mono">'.h(gd_short_repo($cfg['repo'])).'</td></tr>'
 		.'<tr><th>Branch</th><td class="mono">'.h($cfg['branch']).'</td></tr>'
-		// empty = detected at build time, so say that rather than showing a blank row
-		.'<tr><th>Build command</th><td class="mono">'
-		.h(isset($cfg['build_cmd']) && trim((string)$cfg['build_cmd']) !== '' ? $cfg['build_cmd'] : 'auto').'</td></tr>'
-		.'<tr><th>Published from</th><td class="mono">'
-		.h(isset($cfg['output_dir']) && trim((string)$cfg['output_dir']) !== '' ? $cfg['output_dir'].'/' : 'the folder we detect')
-		.' &rarr; '.h($site).'</td></tr>'
+		.(gd_site_mode($cfg) === 'pull'
+			? '<tr><th>Deploy type</th><td>Files only &mdash; no build, the repository is copied as it is</td></tr>'
+			.'<tr><th>Published from</th><td class="mono">'
+			.h(isset($cfg['root_dir']) && trim((string)$cfg['root_dir']) !== '' ? $cfg['root_dir'].'/' : 'the whole repository')
+			.' &rarr; '.h($site).'</td></tr>'
+			// empty = detected at build time, so say that rather than showing a blank row
+			: '<tr><th>Build command</th><td class="mono">'
+			.h(isset($cfg['build_cmd']) && trim((string)$cfg['build_cmd']) !== '' ? $cfg['build_cmd'] : 'auto').'</td></tr>'
+			.'<tr><th>Published from</th><td class="mono">'
+			.h(isset($cfg['output_dir']) && trim((string)$cfg['output_dir']) !== '' ? $cfg['output_dir'].'/' : 'the folder we detect')
+			.' &rarr; '.h($site).'</td></tr>')
 		.'<tr><th>Email</th><td class="mono">'
 		.h($cfg['notify_email'] !== '' ? $cfg['notify_email'].' ('.$cfg['notify_on'].')' : 'off').'</td></tr>'
 		.'</table></div>';
@@ -2009,12 +2086,11 @@ if($view === 'log'){
 	if(isset($trigl[$trig])) $facts[] = h($trigl[$trig]);
 	echo implode(' <span class="gd-dot">&middot;</span> ', $facts);
 	$rdir = isset($cfg['root_dir']) ? trim((string)$cfg['root_dir']) : '';
-	$bcmd = isset($cfg['build_cmd']) ? trim((string)$cfg['build_cmd']) : '';
 	echo '</div><div class="gd-status-side"><span class="mono">'
 		.h(gd_short_repo($cfg['repo'])).'</span> <span class="gd-dot">&middot;</span> <span class="mono">'
 		.'<i class="fas fa-code-branch me-1" aria-hidden="true"></i>'.h($cfg['branch']).'</span> '
 		.($rdir !== '' ? '<span class="gd-dot">&middot;</span> <span class="mono">folder: '.h($rdir).'</span> ' : '')
-		.'<span class="gd-dot">&middot;</span> <span class="mono">build: '.h($bcmd !== '' ? $bcmd : 'auto').'</span> '
+		.'<span class="gd-dot">&middot;</span> <span class="mono">'.h(gd_mode_label($cfg)).'</span> '
 		.'<a href="https://'.h($site).'" target="_blank" rel="noopener">Open the site<i class="fas fa-external-link-alt gd-ext" aria-hidden="true"></i></a>'
 		.'</div></div>';
 
@@ -2155,6 +2231,8 @@ if($view === 'edit'){
 		'notify_email' => isset($cfg['notify_email']) ? (string)$cfg['notify_email'] : '',
 		'notify_on'    => gd_valid_notify_on($non) ? $non : 'fail',
 		'ack'          => !empty($cfg['allow_shared_docroot']),
+		'deploy_mode'  => gd_site_mode($cfg),
+		'was_pull'     => (gd_site_mode($cfg) === 'pull'),
 	), $form);
 
 	$warn = gd_risk_warning($user, $site);

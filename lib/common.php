@@ -89,6 +89,17 @@ function gd_valid_node_version($v){
 	return is_string($v) && preg_match('~^v?[0-9]{1,2}(\.[0-9]{1,3}){0,2}\z~', $v);
 }
 
+/**
+ * Deploy type. 'build' (the default, and what every config without the key means):
+ * install + build, then the website folder is made an exact mirror of the output.
+ * 'pull' (files only): the repository's tracked files are published as they are,
+ * git-pull style — nothing outside the repository is ever deleted. For PHP sites.
+ */
+function gd_valid_deploy_mode($m){ return $m === 'build' || $m === 'pull'; }
+function gd_site_mode($cfg){
+	return (is_array($cfg) && isset($cfg['deploy_mode']) && $cfg['deploy_mode'] === 'pull') ? 'pull' : 'build';
+}
+
 // Relative dir inside the repo, e.g. "dist", "build", "packages/site/dist"
 function gd_valid_output_dir($dir){
 	return is_string($dir) && preg_match('~^[A-Za-z0-9][A-Za-z0-9/_.-]{0,100}$~', $dir)
@@ -124,6 +135,7 @@ function gd_load_site($site){
 	// An empty output_dir is legal now: it means "let the build work the folder out".
 	if(!gd_valid_root_dir($cfg['output_dir'] ?? '')) return null;
 	if(!gd_valid_node_version($cfg['node_version'] ?? '')) return null;
+	if(isset($cfg['deploy_mode']) && !gd_valid_deploy_mode($cfg['deploy_mode'])) return null;
 	return $cfg;
 }
 

@@ -599,7 +599,8 @@ if(!$rows){
 				? '<div class="gd-err">'.h(mb_substr($err, 0, 160)).'</div>' : '')
 			.'</td>'
 			.'<td class="mono">'.h($cfg['user']).'</td>'
-			.'<td class="mono">'.h(gd_short_repo($cfg['repo'])).'</td>'
+			.'<td class="mono">'.h(gd_short_repo($cfg['repo']))
+			.(gd_site_mode($cfg) === 'pull' ? '<div class="small text-muted">files only (no build)</div>' : '').'</td>'
 			.'<td class="mono">'.h($cfg['branch']).'</td>'
 			.'<td>'.gd_badge($st, $r['q']).'</td>'
 			.'<td>'.gd_rel($r['last'], 'never').'</td>'

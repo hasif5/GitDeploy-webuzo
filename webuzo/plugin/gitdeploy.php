@@ -2,7 +2,7 @@
 /*
 Plugin Name: GitDeploy
 Description: Deploy static sites (Vite, Astro, any dist builder) from GitHub to your domains. Powered by Digitalbkk Co., Ltd.
-Version: 1.7.0
+Version: 1.8.0
 Plugin URI: https://www.digitalbkk.com
 Author: Hasif Ahmed <hasif5@gmail.com> — developed by the Digitalbkk team
 Author URI: https://www.digitalbkk.com

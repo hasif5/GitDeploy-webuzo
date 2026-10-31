@@ -1,6 +1,6 @@
 #!/bin/bash
 # GitDeploy build script. Runs AS THE SITE USER (via setpriv from runner.php).
-# Env contract (set by runner): HOME USER PATH GD_SITE GD_REPO GD_BRANCH
+# Env contract (set by runner): HOME USER PATH GD_SITE GD_REPO GD_BRANCH GD_DEPLOY_MODE
 #   GD_BUILD_CMD GD_OUTPUT_DIR GD_DOCROOT GD_KEY GD_ROOT_DIR GD_POST_CMD
 #   GD_NODE_VERSION  plus GD_ENV_* user vars.
 # GD_BUILD_CMD / GD_OUTPUT_DIR may be empty, which means "work it out from the repo".
@@ -45,7 +45,11 @@ case "${GD_OUTPUT_DIR:-}" in /*|*..*) echo "FATAL: bad output dir"; exit 10;; es
 # otherwise set GD_DOCROOT and rsync --delete-after over another site's docroot).
 PUBLISH_ROOT="$GD_DOCROOT"
 PUBLISH_HOME="$HOME"
-readonly PUBLISH_ROOT PUBLISH_HOME
+# build = install + build + mirror the output (the folder becomes an exact copy).
+# pull  = publish the repository's tracked files as they are, git-pull style.
+DEPLOY_MODE="${GD_DEPLOY_MODE:-build}"
+case "$DEPLOY_MODE" in build|pull) ;; *) echo "FATAL: unknown deploy mode"; exit 10;; esac
+readonly PUBLISH_ROOT PUBLISH_HOME DEPLOY_MODE
 
 # Env names that must never be imported from a repo or from panel env settings.
 gd_env_blocked(){
@@ -57,6 +61,108 @@ gd_env_blocked(){
 
 mkdir -p "$WORK"
 
+# Expose GD_ENV_FOO=bar to the build as FOO=bar (called after repo env, so panel wins)
+gd_export_panel_env(){
+	local v
+	while IFS= read -r v; do
+		[ -n "$v" ] || continue
+		if gd_env_blocked "${v#GD_ENV_}"; then echo "   env (panel): ${v%%=*} REFUSED (reserved name)"; continue; fi
+		export "${v#GD_ENV_}"
+	done < <(env | grep '^GD_ENV_' || true)
+}
+
+# Keep the 5 most recent releases (never pruning the one just published)
+gd_prune_releases(){
+	local keep="$1" old
+	ls -1t "$WORK/releases" 2>/dev/null | grep -v '\.new$' | tail -n +6 | while IFS= read -r old; do
+		[ "$old" != "$keep" ] && rm -rf "$WORK/releases/$old" && echo "   pruned old release $old"
+	done
+}
+
+# ----------------------------------------------------------- files-only mode
+# What the website folder is known to hold from us: a NUL-separated list of the
+# paths the last files-only publish wrote. Anything not on it (uploads, caches,
+# .env, config the app writes for itself) was never ours and is never touched.
+PULL_LIST="$WORK/published.list"
+
+# Publish release dir $1 into the website folder with git-pull semantics:
+#  - files the repository tracks are added or updated (never mirrored with --delete);
+#  - files we published last time that the repository no longer has are removed,
+#    but ONLY if they are still byte-identical to what we published — a file that
+#    was edited on the server is left in place and reported, just as git refuses
+#    to throw away local changes;
+#  - .htaccess is updated when the repository has one but never deleted.
+gd_pull_publish(){
+	local rel="$1" prev_sha prev_rel newl f p parent real d removed=0 kept=0
+	newl="$WORK/.published.list.new"
+	( cd "$rel" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\0' ) | sort -z > "$newl"
+	if [ ! -s "$newl" ]; then
+		rm -f "$newl"
+		echo "FATAL: this commit has no files to publish — refusing to touch the website folder"
+		exit 11
+	fi
+
+	prev_sha=$(cat "$WORK/last_ok_sha" 2>/dev/null || true)
+	case "$prev_sha" in *[!0-9a-f]*|"") prev_sha='';; esac
+	prev_rel=''
+	[ -n "$prev_sha" ] && [ -d "$WORK/releases/$prev_sha" ] && prev_rel="$WORK/releases/$prev_sha"
+
+	echo "== Publishing to $PUBLISH_ROOT (files only — nothing outside the repository is touched)"
+	local out="$WORK/.publish.out" rc=0 n
+	# The repository wins for files it tracks, but say so when that replaces an
+	# edit someone made on the server since the last deploy (it would be lost).
+	if [ -n "$prev_rel" ]; then
+		rsync -rlcn --out-format='%n' "$prev_rel"/ "$PUBLISH_ROOT"/ 2>/dev/null | grep -v '/$' \
+		| while IFS= read -r f; do
+			p="$PUBLISH_ROOT/$f"
+			{ [ -f "$p" ] && [ ! -L "$p" ] && [ -f "$rel/$f" ]; } || continue
+			cmp -s -- "$p" "$rel/$f" || echo "   WARN: $f was changed on the server — replaced with the repository's version"
+		done || true
+	fi
+	rsync -rlc --out-format='%n' "$rel"/ "$PUBLISH_ROOT"/ > "$out" || rc=$?
+	n=$(grep -cv '/$' "$out" || true)
+	grep -v '/$' "$out" | head -n 200 | sed 's/^/   updated /' || true
+	[ "$n" -gt 200 ] && echo "   ... and $((n - 200)) more"
+	echo "   $n file(s) added or changed"
+	rm -f "$out"
+	[ "$rc" -eq 0 ] || { echo "FATAL: copying files into the website folder failed (rsync exit $rc)"; exit 11; }
+
+	if [ -f "$PULL_LIST" ]; then
+		while IFS= read -r -d '' f; do
+			case "$f" in ''|/*|..|../*|*/..|*/../*) continue;; esac
+			case "$f" in .htaccess) echo "   kept .htaccess (no longer in the repository, but never deleted)"; continue;; esac
+			p="$PUBLISH_ROOT/$f"
+			[ -L "$p" ] || [ -f "$p" ] || continue
+			# never follow a symlinked folder out of the website folder
+			parent=$(dirname -- "$p")
+			real=$(cd -- "$parent" 2>/dev/null && pwd -P) || continue
+			case "$real/" in "$PUBLISH_ROOT"/*) ;; *) continue;; esac
+			# only remove what is provably still our own, unmodified copy
+			if [ -z "$prev_rel" ]; then
+				echo "   kept $f (cannot verify it is unchanged — previous release was pruned)"; kept=$((kept + 1)); continue
+			fi
+			if [ -L "$p" ]; then
+				[ -L "$prev_rel/$f" ] && [ "$(readlink -- "$p")" = "$(readlink -- "$prev_rel/$f")" ] \
+					|| { echo "   kept $f (changed on the server since the last deploy)"; kept=$((kept + 1)); continue; }
+			elif ! cmp -s -- "$p" "$prev_rel/$f"; then
+				echo "   kept $f (changed on the server since the last deploy)"; kept=$((kept + 1)); continue
+			fi
+			rm -f -- "$p" && { echo "   removed $f"; removed=$((removed + 1)); }
+			# tidy folders that are now empty and no longer exist in the repository
+			d=$(dirname -- "$f")
+			while [ "$d" != "." ] && [ ! -d "$rel/$d" ]; do
+				rmdir -- "$PUBLISH_ROOT/$d" 2>/dev/null || break
+				d=$(dirname -- "$d")
+			done
+		done < <(comm -z -23 <(sort -z "$PULL_LIST") "$newl")
+	else
+		echo "   first files-only deploy: nothing is removed from the website folder this time"
+	fi
+	[ "$removed" -gt 0 ] && echo "   removed $removed file(s) the repository no longer has"
+	[ "$kept" -gt 0 ] && echo "   WARN: $kept file(s) were left in place — see above"
+	mv -f "$newl" "$PULL_LIST"
+}
+
 # Rollback mode: publish a previously built release, no git/npm involved.
 if [ "${GD_MODE:-}" = "rollback" ]; then
 	case "${GD_SHA:-}" in
@@ -65,9 +171,14 @@ if [ "${GD_MODE:-}" = "rollback" ]; then
 	REL="$WORK/releases/$GD_SHA"
 	[ -d "$REL" ] && [ -n "$(ls -A "$REL")" ] || { echo "FATAL: release $GD_SHA not found (it may have been pruned)"; exit 12; }
 	echo "== Rolling back to release $GD_SHA -> $PUBLISH_ROOT"
-	rsync -rlc --delete-after \
-		--exclude '/.well-known/' --exclude '/cgi-bin/' --exclude '/.htaccess' \
-		"$REL"/ "$PUBLISH_ROOT"/
+	if [ "$DEPLOY_MODE" = pull ]; then
+		gd_pull_publish "$REL"
+	else
+		rsync -rlc --delete-after \
+			--exclude '/.well-known/' --exclude '/cgi-bin/' --exclude '/.htaccess' \
+			"$REL"/ "$PUBLISH_ROOT"/
+		rm -f "$PULL_LIST"
+	fi
 	echo "$GD_SHA" > "$WORK/last_ok_sha"
 	echo "== Rolled back to $GD_SHA at $PUBLISH_ROOT"
 	exit 0
@@ -92,6 +203,53 @@ if [ -f "$REPO/.gitmodules" ]; then
 	echo "== Updating submodules"
 	git -C "$REPO" submodule sync --recursive
 	timeout 300 git -C "$REPO" submodule update --init --recursive
+fi
+
+# Files-only mode (PHP and other sites served straight from source): no Node, no
+# install, no build, no .gitdeploy.json — publish exactly what git tracks.
+if [ "$DEPLOY_MODE" = pull ]; then
+	SRC="$REPO"
+	if [ -n "${GD_ROOT_DIR:-}" ]; then
+		case "$GD_ROOT_DIR" in /*|*..*) echo "FATAL: publish folder must be a relative path inside the repository"; exit 10;; esac
+		SRC="$REPO/$GD_ROOT_DIR"
+		[ -d "$SRC" ] || { echo "FATAL: folder '$GD_ROOT_DIR' does not exist in this repository"; exit 10; }
+		echo "== Publishing only the folder: $GD_ROOT_DIR"
+	fi
+	echo "== Files only: no build step, publishing the repository as it is"
+
+	# Stage the tracked files as a release (also what rollback republishes).
+	# Unchanged files are hard-linked to the previous release so five releases of
+	# a large PHP project do not cost five full copies of disk.
+	REL="$WORK/releases/$SHA"
+	mkdir -p "$WORK/releases"
+	rm -rf "$REL.new"
+	LINK_DEST=()
+	PREV=$(cat "$WORK/last_ok_sha" 2>/dev/null || true)
+	case "$PREV" in *[!0-9a-f]*|"") ;; *) [ -d "$WORK/releases/$PREV" ] && [ "$PREV" != "$SHA" ] && LINK_DEST=(--link-dest="$WORK/releases/$PREV");; esac
+	# Never shipped from the repository: git/CI tooling, and paths that belong to
+	# the server (.env holds the live secrets; .well-known/cgi-bin are the panel's).
+	# (Filtered from the list itself: rsync refuses --exclude'd names in --files-from.)
+	git -C "$SRC" ls-files -z --recurse-submodules \
+	| { grep -zvE '^(\.git(/|$)|\.github/|\.gitdeploy\.json$|\.gitignore$|\.gitattributes$|\.gitmodules$|\.env$|\.well-known/|cgi-bin/)' || true; } \
+	| rsync -rlc --from0 --files-from=- "${LINK_DEST[@]}" "$SRC"/ "$REL.new"/
+	rm -rf "$REL"
+	mv "$REL.new" "$REL"
+
+	gd_pull_publish "$REL"
+	echo "$SHA" > "$WORK/last_ok_sha"
+	gd_prune_releases "$SHA"
+
+	# After-deploy command runs IN THE WEBSITE FOLDER for files-only sites, so
+	# things like "php artisan migrate --force" work. Never fails the deploy.
+	if [ -n "${GD_POST_CMD:-}" ]; then
+		gd_export_panel_env
+		echo "== After-deploy command (in the website folder): $GD_POST_CMD"
+		if ! ( cd "$PUBLISH_ROOT" && nice -n 10 timeout 600 bash -c "$GD_POST_CMD" ); then
+			echo "   WARN: the after-deploy command failed (the site is published and live)"
+		fi
+	fi
+	echo "== Deployed $SHA to $PUBLISH_ROOT"
+	exit 0
 fi
 
 cd "$REPO"
@@ -176,11 +334,7 @@ if [ -f "$REPO/.gitdeploy.json" ]; then
 fi
 
 # Expose GD_ENV_FOO=bar to the build as FOO=bar (after repo env, so panel wins)
-while IFS= read -r v; do
-	[ -n "$v" ] || continue
-	if gd_env_blocked "${v#GD_ENV_}"; then echo "   env (panel): ${v%%=*} REFUSED (reserved name)"; continue; fi
-	export "${v#GD_ENV_}"
-done < <(env | grep '^GD_ENV_' || true)
+gd_export_panel_env
 
 # Monorepo support: run the install/build inside a subdirectory of the repo.
 # output_dir is then relative to that subdirectory.
@@ -324,11 +478,27 @@ if [ -z "${GD_BUILD_CMD:-}" ] || [ -z "${GD_OUTPUT_DIR:-}" ]; then
 fi
 if [ -z "$DET" ] && [ -z "${GD_BUILD_CMD:-}" ]; then
 	echo "FATAL: we could not work out how to build this project."
-	echo "       Open the site in the panel, expand Build settings and fill in the"
-	echo "       build command and output folder — or add a .gitdeploy.json to the repo."
+	if [ -f "$BUILD_DIR/composer.json" ] || compgen -G "$BUILD_DIR/*.php" >/dev/null; then
+		echo "       It looks like a PHP project: open the site's settings and set Deploy type"
+		echo "       to \"Files only (PHP, no build)\" — PHP sites need no build step."
+	else
+		echo "       Open the site in the panel, expand Build settings and fill in the"
+		echo "       build command and output folder — or add a .gitdeploy.json to the repo."
+	fi
 	exit 11
 fi
 [ -n "${GD_OUTPUT_DIR:-}" ] || [ -n "$OUT_CANDIDATES" ] || OUT_CANDIDATES='dist build out public _site'
+
+# A PHP project published "as-is" in build mode would be mirrored with
+# --delete-after, wiping uploads, caches and .env from the live folder. Stop and
+# point at files-only mode, which is built for exactly this.
+if [ -z "${GD_BUILD_CMD:-}" ] && { [ "${GD_OUTPUT_DIR:-}" = "." ] || [ "$OUT_CANDIDATES" = "." ]; } \
+	&& { [ -f "$BUILD_DIR/composer.json" ] || compgen -G "$BUILD_DIR/*.php" >/dev/null; }; then
+	echo "FATAL: this looks like a PHP project. Build mode makes the website folder an exact copy of"
+	echo "       the repository and would delete everything else in it (uploads, caches, .env)."
+	echo "       Open the site's settings and set Deploy type to \"Files only (PHP, no build)\"."
+	exit 11
+fi
 
 # Fail early and clearly when the build needs a tool this server does not have,
 # rather than halfway through with "command not found".
@@ -438,13 +608,11 @@ echo "== Publishing to $PUBLISH_ROOT"
 rsync -rlc --delete-after \
 	--exclude '/.well-known/' --exclude '/cgi-bin/' --exclude '/.htaccess' \
 	"$REL"/ "$PUBLISH_ROOT"/
+# the folder is now an exact mirror, so a files-only list from before is stale
+rm -f "$PULL_LIST"
 
 echo "$SHA" > "$WORK/last_ok_sha"
-
-# Keep the 5 most recent releases (never pruning the one just published)
-ls -1t "$WORK/releases" 2>/dev/null | grep -v '\.new$' | tail -n +6 | while IFS= read -r old; do
-	[ "$old" != "$SHA" ] && rm -rf "$WORK/releases/$old" && echo "   pruned old release $old"
-done
+gd_prune_releases "$SHA"
 
 # Optional post-deploy command (cache purge, ping, etc). A failure here is
 # reported but never fails the deploy — the site is already published.

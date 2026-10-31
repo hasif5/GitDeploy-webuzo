@@ -15,6 +15,44 @@ uses semantic versioning.
 
 ---
 
+## [1.8.0] — 2026-10-31
+
+### Added
+
+- **Files-only deploy type for PHP sites** ("Deploy type → Files only (PHP, no
+  build)" on the add/edit form; `deploy_mode: "pull"` in the site config). No
+  Node, no install, no build and no `.gitdeploy.json`: every push publishes the
+  repository's tracked files (`git ls-files`, submodules included) with
+  `git pull` semantics:
+  - tracked files are added/updated — the docroot is **never** mirrored with
+    `--delete`, so uploads, `vendor/`, caches and anything else not in the
+    repository are untouched;
+  - files the previous deploy published that the repository no longer has are
+    removed **only if still byte-identical** to what was published; a file edited
+    on the server is kept and reported, as git keeps local changes. The list of
+    published paths lives in `~/.gitdeploy/<site>/published.list`;
+  - the first files-only deploy into an existing site deletes nothing;
+  - `.env` is never shipped (the live one always survives), `.well-known/` and
+    `cgi-bin/` are never written, `.htaccess` is updated when tracked but never
+    deleted, and git/CI tooling (`.github/`, `.gitignore`, …) is not published;
+  - a server-side edit to a tracked file that the deploy overwrites is named in
+    the log.
+  Optional "Publish only this folder" (stored as `root_dir`). The after-deploy
+  command runs **inside the docroot** for files-only sites (10-minute cap), so
+  e.g. `php artisan migrate --force` works. Rollback uses the same rules.
+  Releases hard-link unchanged files to the previous release (`--link-dest`).
+- Site summaries, the setup page and the admin table show the deploy type.
+
+### Safety
+
+- Build mode now **refuses a PHP project** published "as-is" (Plain HTML
+  detection with `composer.json` or top-level `*.php`): mirroring it would delete
+  uploads/caches/`.env` from the live folder. The log points at files-only mode.
+  A PHP repo that build mode cannot detect gets the same pointer.
+- Switching an existing files-only site to build mode requires an explicit
+  confirmation, because the next build deploy mirror-deletes everything the build
+  does not produce. A build-mode publish also discards a stale files-only list.
+
 ## [1.7.0] — 2026-08-03
 
 ### Added

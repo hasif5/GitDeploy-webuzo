@@ -10,6 +10,13 @@ that produces a `dist/`) from GitHub straight into a domain's docroot. It works
 out how to build most projects on its own, and installs the Node version a
 repository asks for without touching the server's own Node.
 
+PHP sites (and anything else served straight from source) use the **files-only**
+deploy type instead: no Node and no build — every push updates the docroot the
+way `git pull` would. Files the repository tracks are added/updated, files it
+stopped tracking are removed (only if unmodified on the server), and everything
+else — uploads, `vendor/`, caches, the live `.env` — is never touched. The `.git`
+folder never enters the docroot.
+
 An end user picks a repo, branch, build command and output directory in the
 panel. A GitHub webhook (or the "Deploy now" button) queues a job; a root cron
 runner picks it up once a minute, clones/fetches into a per-user workspace,
