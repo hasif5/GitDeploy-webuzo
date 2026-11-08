@@ -140,7 +140,10 @@ pre.plain{background:#f7f9fb;color:#1d1d1b;border:1px solid #dfdfdf;max-height:n
 .gd-logs li:last-child{border-bottom:0}
 .gd-logs .cur{font-weight:700}
 .gd-logs .hint{margin-top:0}
-.gd-crumbs{margin-bottom:14px;font-size:13px;color:#616161}
+.gd-ic-ok{color:#1a7040}.gd-ic-fail{color:#a92b2b}.gd-ic-warn{color:#8a6100}.gd-ic-run{color:#3c40b8}.gd-ic-idle{color:#8a8ea3}
+.gd-crumbs{margin-bottom:12px;font-size:13px;color:#616161}
+.gd-crumbs a{color:#3453e7;text-decoration:none}
+.gd-crumbs a:hover{text-decoration:underline}
 .gd-foot{color:#616161;font-size:12px;text-align:center;margin-top:4px}
 .gd-powered{color:#71758d;font-size:12px;text-align:center;margin-top:24px}
 .gd-powered a{color:#4f46e5;text-decoration:none;font-weight:600}
@@ -173,3 +176,118 @@ pre.plain{background:#f7f9fb;color:#1d1d1b;border:1px solid #dfdfdf;max-height:n
 /* No per-state stripe on site rows: the status pill (icon + word + colour) already
    carries the state, and a flush left border crowded the text. gd-st-* stays as a
    styling hook. Attention for problem states comes from the pill + inline error. */
+
+
+/* ---------------------------------------------------------------- deploy page
+   Overview -> Deployments -> Output. Same panel palette (#3453e7 / #1d1d1b /
+   #71758d / #eff2f7), Poppins, soft-card; only layout is ours. */
+
+/* overview card */
+.gd-ov-top{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:center;justify-content:space-between}
+.gd-ov-title{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;min-width:0}
+.gd-ov-domain{font-size:20px;font-weight:600;color:#1d1d1b;margin:0;word-break:break-all}
+.gd-ov-open{font-size:13px;color:#3453e7;text-decoration:none;white-space:nowrap}
+.gd-ov-open:hover{text-decoration:underline}
+.gd-ov-act{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.gd-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin:20px 0 0;
+	border:1px solid #eff2f7;border-radius:6px;background:#fafbfd}
+.gd-facts>div{padding:12px 16px;min-width:0;border-left:1px solid #eff2f7}
+.gd-facts>div:first-child{border-left:0}
+.gd-facts dt{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#71758d;font-weight:600;margin-bottom:4px}
+.gd-facts dd{margin:0;min-width:0}
+.gd-facts-main{display:block;color:#1d1d1b;font-size:13.5px;font-weight:500;line-height:1.45;
+	overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.gd-facts .gd-sub{display:block;margin-top:3px}
+.gd-facts .gd-tag{font-size:11px;padding:1px 6px;vertical-align:1px}
+.card-body>.gd-note{margin:16px 0 0}
+.card-body>.gd-cta.mt-0{margin-top:12px!important}
+
+/* deployments list */
+.gd-deps{list-style:none;margin:-24px -24px 0;padding:0}
+.gd-dep-na{font-size:12px;color:#8b8fa3;white-space:nowrap}
+.gd-dep{display:flex;gap:12px;align-items:center;padding:11px 24px;border-bottom:1px solid #eff2f7;
+	border-left:3px solid transparent;transition:background-color .12s}
+.gd-dep:hover{background:#fafbfd}
+.gd-dep.is-cur{background:#f3f5fe;border-left-color:#3453e7}
+.gd-dep-ic{flex:0 0 auto;font-size:15px;width:16px;text-align:center}
+.gd-dep-main{flex:1 1 auto;min-width:0}
+.gd-dep-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:13.5px;font-weight:500;color:#1d1d1b}
+.gd-dep-title>a,.gd-dep-title>span:not(.gd-pill):not(.gd-tag){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+	color:#1d1d1b;text-decoration:none}
+.gd-dep-title>a:hover{color:#3453e7;text-decoration:underline}
+.gd-dep .gd-sub{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gd-dep-act{flex:0 0 auto;display:flex;gap:6px;align-items:center}
+.gd-dep-act form{margin:0}
+.gd-pill-sm{font-size:11px;padding:2px 8px;gap:4px}
+.gd-pill-sm i{font-size:10px}
+.gd-tag-restore{background:#eef0ff;color:#3c40b8}
+.gd-ic-ok{color:#1a7040}.gd-ic-fail{color:#a92b2b}.gd-ic-warn{color:#8a6100}.gd-ic-run{color:#3453e7}.gd-ic-idle{color:#8a8ea3}
+
+/* per-row "more" menu (native <details>, no JS needed to open) */
+.gd-menu{position:relative}
+.gd-menu>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+	min-width:32px;border-radius:4px}
+.gd-menu>summary::-webkit-details-marker{display:none}
+.gd-menu[open]>summary{background:#1976d2;color:#fff}
+.gd-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:20;min-width:250px;padding:6px;
+	background:#fff;border:1px solid #dfdfdf;border-radius:6px;box-shadow:0 12px 24px rgba(0,0,0,.1)}
+.gd-menu-pop form{margin:0}
+.gd-menu-item{display:grid;grid-template-columns:18px 1fr;column-gap:8px;width:100%;text-align:left;border:0;background:none;
+	padding:8px 10px;border-radius:4px;font-size:13px;font-weight:500;color:#1d1d1b;cursor:pointer}
+.gd-menu-item i{grid-row:1/3;margin-top:3px}
+.gd-menu-item span{grid-column:2;font-size:11.5px;font-weight:400;color:#71758d}
+.gd-menu-item:hover,.gd-menu-item:focus-visible{background:#f6f6f9}
+.gd-menu-danger,.gd-menu-danger i{color:#a92b2b}
+.gd-menu-danger:hover{background:#fdeaea}
+
+/* footer: what is stored + the limit */
+.gd-dep-foot{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;
+	margin:0 -24px -24px;padding:12px 24px;border-top:1px solid #eff2f7;background:#fafbfd;border-radius:0 0 6px 6px;
+	font-size:12.5px;color:#71758d}
+.gd-dep-foot-info i{margin-right:6px}
+.gd-dep-foot-keep{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+.gd-dep-foot-keep label{margin:0}
+.gd-dep-foot-keep select{width:auto;min-width:64px;padding-top:2px;padding-bottom:2px;font-size:12.5px}
+.gd-deps+.gd-dep-foot{margin-top:0}
+.gd-empty+.gd-dep-foot{margin-top:8px}
+
+/* site list: the live commit, by name */
+.gd-site-commit{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;color:#1d1d1b;min-width:0}
+.gd-site-commit .mono{color:#71758d;font-size:12.5px;flex:0 0 auto}
+.gd-site-msg{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media(max-width:900px){
+	.gd-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+	.gd-facts>div:nth-child(3){border-left:0}
+	.gd-facts>div:nth-child(n+3){border-top:1px solid #eff2f7}
+}
+@media(max-width:720px){
+	.gd-deps{margin:-16px -16px 0}
+	.gd-dep{padding:10px 16px;flex-wrap:wrap}
+	.gd-dep-main{flex-basis:calc(100% - 28px)}
+	.gd-dep-act{margin-left:28px}
+	.gd-dep .gd-sub{white-space:normal}
+	.gd-dep-foot{margin:0 -16px -16px;padding:12px 16px}
+}
+@media(max-width:520px){
+	.gd-facts{grid-template-columns:minmax(0,1fr)}
+	.gd-facts>div{border-left:0}
+	.gd-facts>div+div{border-top:1px solid #eff2f7}
+}
+
+/* the panel capitalises button text; commit ids must stay as they are */
+.gd-nocap{text-transform:none!important}
+
+/* deployments: latest 5, older ones behind a toggle (native <details>) */
+.gd-deps-more{margin:0 -24px}
+.gd-deps-more>summary{list-style:none;cursor:pointer;padding:10px 24px;text-align:center;font-size:13px;font-weight:500;
+	color:#3453e7;border-bottom:1px solid #eff2f7;user-select:none}
+.gd-deps-more>summary::-webkit-details-marker{display:none}
+.gd-deps-more>summary:hover{background:#f3f5fe}
+.gd-deps-more .gd-more-opened,.gd-deps-more[open] .gd-more-closed{display:none}
+.gd-deps-more[open] .gd-more-opened{display:inline}
+.gd-deps.gd-deps-older{margin:0}
+@media(max-width:720px){
+	.gd-deps-more{margin:0 -16px}
+	.gd-deps-more>summary{padding:10px 16px}
+}

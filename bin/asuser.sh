@@ -10,11 +10,19 @@
 #   asuser.sh rmwork <site>     -> remove ~/.gitdeploy/<site>
 #   asuser.sh disk              -> READ-ONLY: print ~/.gitdeploy sizes in KiB as
 #                                  total=/work=/releases=/toolchains= lines
+#   asuser.sh relsize <site>    -> READ-ONLY: print releases=<KiB> for that site
+#   asuser.sh reldel <site> <sha> <live-sha|->
+#                               -> remove one saved release (never the live one)
+#   asuser.sh relprune <site> <keep> <live-sha|->
+#                               -> keep the <keep> newest releases (the live one always
+#                                  stays and counts toward <keep>), remove the rest
 set -euo pipefail
 umask 077
 
 op="${1:-}"
 site="${2:-}"
+arg3="${3:-}"
+arg4="${4:-}"
 
 # Every op except `disk` acts on one site; `disk` takes no argument at all and
 # must never be given one (a stray second argument means a confused caller).
@@ -37,6 +45,26 @@ esac
 [ -n "${HOME:-}" ] && [ -d "$HOME" ] || { echo "no home directory" >&2; exit 3; }
 
 KEY="$HOME/.ssh/gitdeploy-$site"
+
+is_sha() { printf '%s' "$1" | grep -Eqx '[0-9a-f]{40}'; }
+
+# ~/.gitdeploy/<site>/releases, refusing symlinks on the way (we run as the
+# user, so this is about not being steered somewhere unexpected, not privilege).
+rel_dir() {
+	local g="$HOME/.gitdeploy" w="$HOME/.gitdeploy/$site" r="$HOME/.gitdeploy/$site/releases"
+	if [ -L "$g" ] || [ -L "$w" ] || [ -L "$r" ]; then echo "symlinked workspace" >&2; exit 4; fi
+	printf '%s' "$r"
+}
+
+# The live release: the panel passes the one it knows, the workspace has its own
+# record. Both are protected, so a disagreement can only ever keep more.
+live_ok() {   # $1 = candidate sha; returns 0 if it must be kept
+	local c=$1 f="$HOME/.gitdeploy/$site/last_ok_sha" disk=''
+	[ "$arg4" != "-" ] && [ "$c" = "$arg4" ] && return 0
+	if [ -f "$f" ] && [ ! -L "$f" ]; then disk=$(head -c 41 "$f" | tr -d '\n'); fi
+	[ -n "$disk" ] && [ "$c" = "$disk" ] && return 0
+	return 1
+}
 
 # KiB used by one directory, 0 when it is missing. -x stays on one filesystem and
 # du never follows symlinks, so this cannot wander outside the home it is given.
@@ -70,6 +98,39 @@ case "$op" in
 		[ -L "$W" ] && { rm -f "$W"; exit 0; }
 		if [ -d "$W" ]; then rm -rf --one-file-system "$W"; fi
 		rmdir "$HOME/.gitdeploy" 2>/dev/null || true
+		;;
+	relsize)
+		R=$(rel_dir)
+		printf 'releases=%s\n' "$(du_kb "$R")"
+		;;
+	reldel)
+		is_sha "$arg3" || { echo "bad release id" >&2; exit 2; }
+		[ "$arg4" = "-" ] || is_sha "$arg4" || { echo "bad live id" >&2; exit 2; }
+		live_ok "$arg3" && { echo "refusing: that version is live" >&2; exit 5; }
+		R=$(rel_dir)
+		[ -d "$R/$arg3" ] && [ ! -L "$R/$arg3" ] || { echo "no such release" >&2; exit 6; }
+		rm -rf --one-file-system -- "$R/$arg3"
+		echo "deleted $arg3"
+		;;
+	relprune)
+		case "$arg3" in ''|*[!0-9]*) echo "bad keep count" >&2; exit 2;; esac
+		[ "$arg3" -ge 1 ] && [ "$arg3" -le 30 ] || { echo "bad keep count" >&2; exit 2; }
+		[ "$arg4" = "-" ] || is_sha "$arg4" || { echo "bad live id" >&2; exit 2; }
+		R=$(rel_dir)
+		[ -d "$R" ] || exit 0
+		# newest first; the live release always stays and uses up one of the slots
+		left=$arg3
+		for d in $(ls -1t -- "$R"); do
+			is_sha "$d" && [ -d "$R/$d" ] && [ ! -L "$R/$d" ] || continue
+			if live_ok "$d"; then left=$((left - 1)); fi
+		done
+		for d in $(ls -1t -- "$R"); do
+			is_sha "$d" && [ -d "$R/$d" ] && [ ! -L "$R/$d" ] || continue
+			live_ok "$d" && continue
+			if [ "$left" -gt 0 ]; then left=$((left - 1)); continue; fi
+			rm -rf --one-file-system -- "$R/$d"
+			echo "pruned $d"
+		done
 		;;
 	disk)
 		# Read-only accounting for the server admin's overview page. Reads nothing,

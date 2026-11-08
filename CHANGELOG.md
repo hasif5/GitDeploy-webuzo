@@ -15,6 +15,43 @@ uses semantic versioning.
 
 ---
 
+## [1.10.0] — 2026-11-08
+
+### Added
+- **Saved-version limit per site.** The "Previous versions" card has a *Keep the last N
+  successful deploys* control (1–30, default 5 — unchanged behaviour until someone
+  changes it). Lowering it removes the extra versions immediately; if a build is running,
+  that build applies the new limit when it finishes. Stored as `keep_releases` in the
+  site config, passed to builds as `GD_KEEP_RELEASES`.
+- **Delete a saved version** from the card to free disk space. The live version can
+  never be deleted, and nothing can be deleted while a build is running or queued.
+- The card shows how many versions are saved and how much disk they use.
+- **Builds are named after their commit.** "Recent builds" now lists each build by its
+  commit message with a result icon (deployed / failed / preview / building), short sha,
+  time, what started it and the commit author; restores read "Restored: <message>".
+  The status line, the "Previous versions" card, the site list and the restore/delete
+  confirmations show the commit message too. build.sh prints `== Commit:` / `== Author:`
+  right after the sha (before any repository code runs); the runner records each build
+  in a root-only `logs/<site>/builds.json` (per-log facts + a sha → message map capped at
+  200, so saved versions keep their names after old logs are pruned). Logs from before
+  this change are parsed on the fly.
+- **Redesigned deploy page.** One *Deployments* list replaces the separate "Previous
+  versions" and "Recent builds" lists (saved versions are attached to the build that made
+  them). Each row: result icon, commit message, short sha · time · duration · trigger ·
+  author; *Restore* on saved versions, *Delete* in a per-row ⋮ menu, "not saved" on older
+  builds; the row being viewed is highlighted. The keep-limit and disk use moved to the
+  list's footer (auto-saves on change). New overview card: domain, status, Open site,
+  Deploy/Settings, and a Live version / Last deploy / Source / Build facts grid. The output
+  card names the build it shows; duplicate buttons under the log are gone. Site list: one
+  *Deployments* button instead of Logs + Versions, and the live commit message on its own
+  line. During a first-deploy preview "Looks right — deploy" is the only primary button;
+  commit ids in buttons are no longer capitalised by the panel theme. Help page updated.
+- The Deployments list shows the latest 5 rows; older ones fold behind **Show N older
+  deployments** (native `<details>`, no JS needed). It opens by itself when the build
+  being viewed is one of the older rows.
+- New `bin/asuser.sh` operations `relsize`, `reldel`, `relprune` (run as the site user;
+  arguments validated in both the panel and the helper; symlinked workspaces refused).
+
 ## [1.9.1] — 2026-10-31
 
 ### Fixed

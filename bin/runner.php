@@ -253,6 +253,7 @@ function gd_deploy($site, $job){
 		'GD_ROOT_DIR' => isset($cfg['root_dir']) ? (string)$cfg['root_dir'] : '',
 		'GD_NODE_VERSION' => isset($cfg['node_version']) ? (string)$cfg['node_version'] : '',
 		'GD_POST_CMD' => isset($cfg['post_cmd']) ? (string)$cfg['post_cmd'] : '',
+		'GD_KEEP_RELEASES' => (string)gd_keep_releases($cfg),
 	];
 	// Owner's OK for a first files-only deploy previewed earlier: the exact commit
 	// they read. build.sh deploys only if the fetched commit is still that one.
@@ -348,8 +349,11 @@ function gd_deploy($site, $job){
 		$sha = trim((string)file_get_contents($sha_file));
 		if(preg_match('~^[0-9a-f]{40}$~', $sha)){ $patch['last_sha'] = $sha; $patch['last_ok_sha'] = $sha; }
 	}
-	gd_write_status($site, $patch);
 	gd_prune_logs($site, 10);
+	gd_build_index_add($site, $logname, $patch['state'], $code);
+	$ix = gd_build_index($site);
+	if(isset($patch['last_sha'])) $patch['commit_msg'] = gd_commit_msg($ix, $patch['last_sha']);
+	gd_write_status($site, $patch);
 
 	// Email notification: on failure by default, or always if notify_on = always
 	$email = isset($cfg['notify_email']) ? $cfg['notify_email'] : '';

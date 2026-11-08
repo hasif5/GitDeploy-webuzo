@@ -453,10 +453,13 @@ deploy.</li>
 <label class="panel-head d-inline-block mb-0"><i class="fas fa-history panel-icon"></i>Rollback &amp; releases</label>
 </div></div>
 <div class="card-body px-4 py-4">
-<p>The last <strong>5 successful builds</strong> of each site are kept as releases. The
-<strong>Previous versions</strong> list on a site's Logs page shows them; clicking <strong>Restore this
-version</strong> republishes that exact build straight from the archived copy &mdash; nothing is rebuilt,
-git and npm are never invoked. That also means a rollback works even if GitHub is unreachable.</p>
+<p>A site's <strong>Deployments</strong> page lists every build, named after the commit it was built
+from. The last <strong>5 successful builds</strong> are saved (change this with <strong>Keep the last &hellip;
+successful deploys</strong> at the bottom of the list, 1&ndash;30). Clicking <strong>Restore</strong> on a saved
+version republishes that exact build straight from the archived copy &mdash; nothing is rebuilt, git and npm are
+never invoked. That also means a rollback works even if GitHub is unreachable.</p>
+<p>To free disk space, open the <strong>&#8942;</strong> menu on a saved version and choose <strong>Delete saved
+version</strong>, or lower the limit. The version that is live can never be deleted.</p>
 </div>
 </div>
 

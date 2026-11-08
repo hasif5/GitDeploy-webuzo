@@ -238,11 +238,49 @@ function gd_short_sha($st){
 	return preg_match('~^[0-9a-f]{7,40}$~', $sha) ? substr($sha, 0, 7) : '';
 }
 
+// Commit subject of the status's commit: the status itself first, then the build index.
+function gd_status_msg($st, $ix){
+	if(!empty($st['commit_msg'])) return (string)$st['commit_msg'];
+	$sha = isset($st['last_sha']) ? (string)$st['last_sha'] : '';
+	if(!preg_match('~^[0-9a-f]{40}$~', $sha)) return '';
+	return gd_commit_msg($ix, $sha);
+}
+
+// Shorten a commit subject for tight spots, on a character (not byte) boundary.
+function gd_trim_msg($m, $n = 72){
+	$m = (string)$m;
+	return mb_strlen($m, 'UTF-8') > $n ? rtrim(mb_substr($m, 0, $n - 1, 'UTF-8')).'…' : $m;
+}
+
+/**
+ * Facts for one deploy log: the runner's index entry when it has one, otherwise
+ * read from the log itself (logs from before the index existed, or a build still
+ * running). The commit subject falls back to the index's sha -> subject map.
+ */
+function gd_log_row($path, $ix){
+	$b = basename($path);
+	$f = (isset($ix['builds'][$b]) && is_array($ix['builds'][$b])) ? $ix['builds'][$b] : gd_log_facts($path);
+	foreach(array('sha', 'msg', 'author', 'trigger', 'state', 'result') as $k) $f[$k] = isset($f[$k]) ? (string)$f[$k] : '';
+	if(!preg_match('~^[0-9a-f]{40}$~', $f['sha'])) $f['sha'] = '';
+	if($f['msg'] === '' && $f['sha'] !== '') $f['msg'] = gd_commit_msg($ix, $f['sha']);
+	if($f['state'] === '') $f['state'] = $f['result'];
+	$f['rollback'] = !empty($f['rollback']);
+	return $f;
+}
+
+// "“Fix footer”" / "commit abc1234" / $none — how a build is named in running text.
+function gd_build_name($f, $none, $n = 60){
+	if($f['msg'] !== '') return '&ldquo;'.h(gd_trim_msg($f['msg'], $n)).'&rdquo;';
+	if($f['sha'] !== '') return 'commit <span class="mono">'.h(substr($f['sha'], 0, 7)).'</span>';
+	return $none;
+}
+
 /**
  * Archived releases for a site: /home/<user>/.gitdeploy/<site>/releases/<40-hex-sha>/.
  * The path is built from validated parts only ($cfg comes from gd_load_site()), the
  * entry names must be a full sha, and symlinked entries are skipped — never followed.
- * Newest first, capped at 10 (the runner keeps 5).
+ * Newest first. The per-site limit (keep_releases, max GD_KEEP_MAX) is applied by the
+ * build and by the panel; the cap here only bounds the page if a folder was filled by hand.
  */
 function gd_releases($cfg){
 	if(!is_array($cfg) || empty($cfg['user']) || empty($cfg['site'])) return array();
@@ -259,7 +297,26 @@ function gd_releases($cfg){
 		$out[] = array('sha' => $e, 'mtime' => (int)@filemtime($p));
 	}
 	usort($out, function($a, $b){ return $b['mtime'] - $a['mtime']; });
-	return array_slice($out, 0, 10);
+	return array_slice($out, 0, GD_KEEP_MAX + 10);
+}
+
+// The live commit from the status file, or '' — what must never be deleted.
+function gd_live_sha($st){
+	$live = (is_array($st) && isset($st['last_ok_sha'])) ? (string)$st['last_ok_sha'] : '';
+	return preg_match('~^[0-9a-f]{40}$~', $live) ? $live : '';
+}
+
+// KiB used by this site's saved versions (measured as the site user), or -1.
+function gd_releases_kb($cfg){
+	$o = ''; $e = '';
+	if(gd_asuser($cfg['user'], 'relsize', $cfg['site'], $o, $e) !== 0) return -1;
+	return preg_match('~^releases=([0-9]{1,15})$~m', $o, $m) ? (int)$m[1] : -1;
+}
+
+function gd_kb_human($kb){
+	if($kb >= 1048576) return round($kb / 1048576, 1).' GB';
+	if($kb >= 1024) return round($kb / 1024, ($kb >= 102400 ? 0 : 1)).' MB';
+	return max(0, (int)$kb).' KB';
 }
 
 // Sites this user owns (config user field must match), newest first by domain name.
@@ -610,16 +667,22 @@ function gd_valid_notify_on($v){ return in_array($v, array('fail', 'always', 'ne
  * the kernel does the ownership check on every path component for us.
  * Returns the exit code (0 = success); $out is stdout, $err a message on failure.
  */
-function gd_asuser($user, $op, $site, &$out, &$err){
+function gd_asuser($user, $op, $site, &$out, &$err, $args = array()){
 	$out = ''; $err = '';
-	if(!in_array($op, array('keygen', 'keydel', 'rmwork'), true)){ $err = 'unknown helper operation'; return -1; }
+	if(!in_array($op, array('keygen', 'keydel', 'rmwork', 'relsize', 'reldel', 'relprune'), true)){ $err = 'unknown helper operation'; return -1; }
 	if(!gd_valid_user($user) || !gd_valid_site($site)){ $err = 'invalid user or site'; return -1; }
+	// extra arguments are only ever commit ids, "-" or a small count
+	if(!is_array($args) || count($args) > 2){ $err = 'bad helper arguments'; return -1; }
+	foreach($args as $a){
+		if(!is_string($a) || !preg_match('~^(?:[0-9a-f]{40}|-|[0-9]{1,2})$~', $a)){ $err = 'bad helper arguments'; return -1; }
+	}
 	$pw = posix_getpwnam($user);
 	if(empty($pw) || (int)$pw['uid'] < 1000){ $err = 'system user not found'; return -1; }
 	if(!is_dir($pw['dir'])){ $err = 'home directory does not exist'; return -1; }
 
 	$cmd = array('/usr/bin/setpriv', '--reuid='.(int)$pw['uid'], '--regid='.(int)$pw['gid'], '--init-groups',
 		'/bin/bash', GD_BASE.'/bin/asuser.sh', $op, $site);
+	foreach($args as $a) $cmd[] = $a;
 	// No --reset-env: the explicit env array below IS the whitelist.
 	$env  = array('HOME' => (string)$pw['dir'], 'USER' => $user, 'PATH' => '/usr/local/bin:/usr/bin:/bin');
 	$desc = array(0 => array('file', '/dev/null', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
@@ -791,11 +854,11 @@ function gd_more_open($title, $sub, $open){
 function gd_more_end(){ echo '</div></details>'; }
 
 // "Deploy now" — a CSRF-protected POST form, used on three screens.
-function gd_deploy_form($site, $sm = false){
+function gd_deploy_form($site, $sm = false, $secondary = false){
 	echo '<form class="d-inline" method="post" action="?act=deploy">';
 	gd_tok_field();
 	echo '<input type="hidden" name="site" value="'.h($site).'">'
-		.'<button class="flat-butt'.($sm ? ' btn-sm' : '').'" type="submit">'
+		.'<button class="'.($secondary ? 'flat-butt-primary' : 'flat-butt').($sm ? ' btn-sm' : '').'" type="submit">'
 		.'<i class="fas fa-rocket me-1"></i>Deploy'.($sm ? '' : ' now').'</button></form>';
 }
 
@@ -806,7 +869,7 @@ function gd_confirm_form($site, $sha, $sm = false){
 	echo '<input type="hidden" name="site" value="'.h($site).'">'
 		.'<input type="hidden" name="confirm_sha" value="'.h($sha).'">'
 		.'<button class="flat-butt'.($sm ? ' btn-sm' : '').'" type="submit">'
-		.'<i class="fas fa-check me-1"></i>Looks right — deploy '.h(substr($sha, 0, 7)).'</button></form>';
+		.'<i class="fas fa-check me-1"></i>Looks right — deploy <span class="gd-nocap">'.h(substr($sha, 0, 7)).'</span></button></form>';
 }
 
 /**
@@ -821,57 +884,193 @@ function gd_refresh_form($to){
 }
 
 /**
- * "Previous versions" card: the archived releases with a rollback button on each
- * one that is not currently live. Rolling back is a CSRF-protected POST that only
- * carries the sha — the handler re-checks it against gd_releases() before queueing.
+ * How long one build took: from the "== GitDeploy <date> UTC" line build.sh writes
+ * first, to the log's last write. 0 when the log does not say.
  */
-function gd_releases_card($cfg, $st, $busy = false){
+function gd_log_secs($path, $mtime){
+	$head = (string)@file_get_contents($path, false, null, 0, 400);
+	if(!preg_match('~^== GitDeploy ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}) UTC~m', $head, $m)) return 0;
+	$t = strtotime($m[1].' UTC');
+	return ($t && $mtime >= $t) ? (int)($mtime - $t) : 0;
+}
+
+/**
+ * One list of everything that was deployed, newest first (the deploy logs we keep),
+ * merged with the saved versions on disk: a saved version is attached to the newest
+ * successful build of its commit, and saved versions older than every kept log get
+ * a row of their own. Each row: sha, msg, author, trigger, state, rollback, file
+ * (log name or ''), ts, secs, saved, live.
+ */
+function gd_deploy_rows($cfg, $st, $logs, $bix, $building){
+	$relmap = array();
+	foreach(gd_releases($cfg) as $r) $relmap[$r['sha']] = $r['mtime'];
+	$live = gd_live_sha($st);
+	$curlog = isset($st['log']) ? (string)$st['log'] : '';
+
+	$rows = array(); $seen = array();
+	foreach(array_slice($logs, 0, 10) as $l){
+		$f = gd_log_row($l, $bix);
+		$f['file'] = basename($l);
+		$f['ts']   = (int)@filemtime($l);
+		if($building && $f['file'] === $curlog) $f['state'] = 'building';
+		$f['secs'] = ($f['state'] === 'building') ? 0 : gd_log_secs($l, $f['ts']);
+		$f['saved'] = false;
+		if($f['state'] === 'success' && $f['sha'] !== '' && isset($relmap[$f['sha']]) && !isset($seen[$f['sha']])){
+			$f['saved'] = true; $seen[$f['sha']] = true;
+		}
+		$rows[] = $f;
+	}
+	foreach($relmap as $sha => $mt){
+		if(isset($seen[$sha])) continue;
+		$rows[] = array('sha' => $sha, 'msg' => gd_commit_msg($bix, $sha),
+			'author' => isset($bix['commits'][$sha]['author']) ? (string)$bix['commits'][$sha]['author'] : '',
+			'trigger' => '', 'state' => 'success', 'rollback' => false, 'file' => '', 'ts' => (int)$mt,
+			'secs' => 0, 'saved' => true);
+	}
+	// newest first; PHP 7.4's usort is not stable, so break ties on the original order
+	foreach($rows as $i => &$r){ $r['_i'] = $i; } unset($r);
+	usort($rows, function($a, $b){ return ($b['ts'] - $a['ts']) ?: ($a['_i'] - $b['_i']); });
+
+	$liveset = false;
+	foreach($rows as &$r){
+		$r['live'] = (!$liveset && $live !== '' && $r['state'] === 'success' && $r['sha'] === $live);
+		if($r['live']) $liveset = true;
+	} unset($r);
+	return $rows;
+}
+
+/**
+ * "Deployments" card: every build, named by its commit, with Restore on each saved
+ * version that is not live and Delete tucked into a per-row menu. The keep-limit and
+ * disk use sit in the card's footer. Every button is a CSRF-protected POST carrying
+ * only a sha or a count — the handlers re-check them before anything is touched.
+ */
+function gd_deploys_card($cfg, $st, $logs, $bix, $path, $building, $busy){
 	$site = (string)$cfg['site'];
-	$rels = gd_releases($cfg);
-	$live = isset($st['last_ok_sha']) ? (string)$st['last_ok_sha'] : '';
-	if(!preg_match('~^[0-9a-f]{40}$~', $live)) $live = '';
+	$rows = gd_deploy_rows($cfg, $st, $logs, $bix, $building);
+	$keep = gd_keep_releases($cfg);
+	$nsaved = 0;
+	foreach($rows as $r) if($r['saved']) $nsaved++;
+	$kb = $nsaved ? gd_releases_kb($cfg) : 0;
+	$cur = ($path !== '') ? basename($path) : '';
 
 	echo '<div id="versions"></div>';
-	gd_card('<i class="fas fa-history panel-icon"></i>Previous versions',
-		'Each successful deploy is kept, so you can put an earlier one back online in seconds. '
-		.'Rolling back republishes files that were already built — nothing is rebuilt.');
+	gd_card('<i class="fas fa-history panel-icon"></i>Deployments',
+		'Every build, newest first. <strong>Restore</strong> puts a saved version back online in seconds — nothing is rebuilt.');
 
-	if(!$rels){
+	if(!$rows){
 		echo '<div class="gd-empty"><i class="fas fa-history fa-2x d-block mb-2" aria-hidden="true"></i>'
-			.'<div class="gd-empty-t">No earlier versions saved yet</div>'
-			.'<p>The last 5 successful deploys are saved automatically. Once this site has deployed '
-			.'successfully, you will be able to switch back to an earlier version from here.</p></div>';
-		gd_card_end();
-		return;
+			.'<div class="gd-empty-t">No deployments yet</div>'
+			.'<p>Each build appears here, named after the commit it was built from. The last '.$keep
+			.' successful one'.($keep === 1 ? ' is' : 's are').' saved so you can switch back to them.</p></div>';
+	}else{
+		$icons = array('success' => array('fa-check-circle', 'ok', 'Deployed'),
+			'failed'   => array('fa-times-circle', 'fail', 'Failed'),
+			'review'   => array('fa-eye', 'warn', 'Preview — waiting for your OK'),
+			'building' => array('fa-circle-notch fa-spin', 'run', 'Building'));
+		$trigw = array('webhook' => 'pushed to GitHub', 'manual' => 'started by you', 'retry' => 'automatic retry');
+
+		// Latest few up front; the rest behind a native <details> toggle (works without
+		// JS). It starts open when the build being viewed is one of the hidden rows.
+		$first  = 5;
+		$nolder = max(0, count($rows) - $first);
+		$open   = false;
+		foreach(array_slice($rows, $first) as $r){ if($r['file'] !== '' && $r['file'] === $cur){ $open = true; break; } }
+
+		echo '<ul class="gd-deps">';
+		foreach($rows as $i => $r){
+			if($i === $first){
+				echo '</ul><details class="gd-deps-more"'.($open ? ' open' : '').'>'
+					.'<summary><span class="gd-more-closed"><i class="fas fa-chevron-down me-1" aria-hidden="true"></i>Show '
+					.$nolder.' older deployment'.($nolder === 1 ? '' : 's').'</span>'
+					.'<span class="gd-more-opened"><i class="fas fa-chevron-up me-1" aria-hidden="true"></i>Show fewer</span></summary>'
+					.'<ul class="gd-deps gd-deps-older">';
+			}
+			$ic    = isset($icons[$r['state']]) ? $icons[$r['state']] : array('fa-question-circle', 'idle', 'Result unknown');
+			$short = $r['sha'] !== '' ? substr($r['sha'], 0, 7) : '';
+			if($r['msg'] !== '')    $title = gd_trim_msg($r['msg'], 90);
+			elseif($short !== '')   $title = 'Commit '.$short;
+			else                    $title = 'Stopped before the code was fetched';
+			$is_cur = ($r['file'] !== '' && $r['file'] === $cur);
+
+			$meta = array();
+			if($short !== '') $meta[] = '<span class="mono">'.h($short).'</span>';
+			$meta[] = gd_rel($r['ts']);
+			if($r['secs'] > 0) $meta[] = h(gd_dur($r['secs']));
+			if($r['rollback'])                         $meta[] = 'restored by you';
+			elseif(isset($trigw[$r['trigger']]))       $meta[] = h($trigw[$r['trigger']]);
+			$who = trim((string)preg_replace('~,\s*[0-9]{4}-[0-9]{2}-[0-9]{2}.*$~', '', $r['author']));
+			if($who !== '' && !$r['rollback']) $meta[] = 'by '.h(gd_trim_msg($who, 40));
+			if($r['file'] === '') $meta[] = '<span class="gd-faint">build log no longer kept</span>';
+
+			echo '<li class="gd-dep'.($is_cur ? ' is-cur' : '').($r['live'] ? ' is-live' : '').'">'
+				.'<i class="fas '.$ic[0].' gd-dep-ic gd-ic-'.$ic[1].'" title="'.h($ic[2]).'" aria-label="'.h($ic[2]).'"></i>'
+				.'<div class="gd-dep-main"><div class="gd-dep-title">';
+			if($r['rollback']) echo '<span class="gd-tag gd-tag-restore"><i class="fas fa-undo" aria-hidden="true"></i>Restore</span> ';
+			if($r['file'] !== ''){
+				echo '<a href="?act=log&amp;site='.h(rawurlencode($site)).'&amp;file='.h(rawurlencode($r['file'])).'#output"'
+					.($r['msg'] !== '' ? ' title="'.h($r['msg']).'"' : '').'>'.h($title).'</a>';
+			}else{
+				echo '<span'.($r['msg'] !== '' ? ' title="'.h($r['msg']).'"' : '').'>'.h($title).'</span>';
+			}
+			if($r['live'])  echo ' <span class="gd-pill gd-pill-ok gd-pill-sm"><i class="fas fa-check-circle" aria-hidden="true"></i><span>Live</span></span>';
+			if($is_cur)     echo ' <span class="gd-tag">viewing</span>';
+			echo '</div><div class="gd-sub">'.implode(' <span class="gd-dot">&middot;</span> ', $meta).'</div></div>';
+
+			echo '<div class="gd-dep-act">';
+			if($r['state'] === 'success' && !$r['saved'] && !$r['live'] && $r['sha'] !== ''){
+				echo '<span class="gd-dep-na" title="Only the last '.$keep.' successful deploys are saved for restoring — see the limit below">not saved</span>';
+			}
+			if($r['saved'] && !$r['live']){
+				$label = $short.($r['msg'] !== '' ? ' ("'.gd_trim_msg($r['msg'], 50).'")' : '');
+				if($busy){
+					echo '<button class="flat-butt-primary btn-sm" type="button" disabled '
+						.'title="Available when the running build finishes"><i class="fas fa-undo me-1"></i>Restore</button>';
+				}else{
+					// h() turns the JS string quotes into &#039; — safe inside the double-quoted attribute
+					$q  = "'Put ".$site.' back to version '.$label."?'";
+					$qd = "'Delete saved version ".$label.' of '.$site.'? You will no longer be able to restore it. The live site is not affected.'."'";
+					echo '<form class="d-inline" method="post" action="?act=rollback">';
+					gd_tok_field();
+					echo '<input type="hidden" name="site" value="'.h($site).'">'
+						.'<input type="hidden" name="sha" value="'.h($r['sha']).'">'
+						.'<button class="flat-butt-primary btn-sm" type="submit" onclick="return confirm('.h($q).')" '
+						.'title="Put this version back online"><i class="fas fa-undo me-1"></i>Restore</button></form>'
+						.'<details class="gd-menu"><summary class="flat-butt-primary btn-sm gd-iconbtn" title="More actions" aria-label="More actions for '.h($short).'">'
+						.'<i class="fas fa-ellipsis-v" aria-hidden="true"></i></summary><div class="gd-menu-pop">'
+						.'<form method="post" action="?act=delrelease">';
+					gd_tok_field();
+					echo '<input type="hidden" name="site" value="'.h($site).'">'
+						.'<input type="hidden" name="sha" value="'.h($r['sha']).'">'
+						.'<button class="gd-menu-item gd-menu-danger" type="submit" onclick="return confirm('.h($qd).')">'
+						.'<i class="fas fa-trash-alt" aria-hidden="true"></i>Delete saved version'
+						.'<span>Frees disk space; you can no longer restore it</span></button></form></div></details>';
+				}
+			}
+			echo '</div></li>';
+		}
+		echo '</ul>'.($nolder > 0 ? '</details>' : '');
 	}
 
-	echo '<ul class="gd-rels">';
-	foreach($rels as $r){
-		$short  = substr($r['sha'], 0, 7);
-		$is_live = ($live !== '' && hash_equals($live, $r['sha']));
-		echo '<li class="gd-rel'.($is_live ? ' is-live' : '').'">'
-			.'<div class="gd-rel-main"><span class="mono gd-rel-sha" title="'.h($r['sha']).'">'.h($short).'</span>'
-			.($is_live ? ' <span class="gd-pill gd-pill-ok"><i class="fas fa-check-circle" aria-hidden="true"></i>'
-				.'<span>Live now</span></span>' : '')
-			.'<div class="gd-sub">Built '.gd_rel($r['mtime']).'</div></div>'
-			.'<div class="gd-rel-act">';
-		if($is_live){
-			echo '<span class="hint mb-0">This is what visitors see</span>';
-		}elseif($busy){
-			echo '<span class="hint mb-0">A build is running — rollback available when it finishes</span>';
-		}else{
-			// h() turns the JS string quotes into &#039; — safe inside the double-quoted attribute
-			$q = "'Put ".$site.' back to version '.$short."?'";
-			echo '<form class="d-inline" method="post" action="?act=rollback">';
-			gd_tok_field();
-			echo '<input type="hidden" name="site" value="'.h($site).'">'
-				.'<input type="hidden" name="sha" value="'.h($r['sha']).'">'
-				.'<button class="flat-butt-warning btn-sm" type="submit" onclick="return confirm('.h($q).')">'
-				.'<i class="fas fa-history me-1"></i>Restore this version</button></form>';
-		}
-		echo '</div></li>';
+	// footer: what is stored and the limit (auto-saves on change; button without JS)
+	echo '<form class="gd-dep-foot" method="post" action="?act=keep">';
+	gd_tok_field();
+	echo '<input type="hidden" name="site" value="'.h($site).'">'
+		.'<div class="gd-dep-foot-info"><i class="fas fa-hdd" aria-hidden="true"></i>'
+		.($nsaved ? $nsaved.' saved version'.($nsaved === 1 ? '' : 's').($kb >= 0 ? ' &middot; '.h(gd_kb_human($kb)).' on disk' : '')
+			: 'No saved versions yet')
+		.'</div><div class="gd-dep-foot-keep"><label for="keep_releases">Keep the last</label>'
+		.'<select class="form-select form-select-sm" name="keep" id="keep_releases" onchange="this.form.submit()">';
+	$opts = array(1, 2, 3, 5, 10, 15, 20, 30);
+	if(!in_array($keep, $opts, true)){ $opts[] = $keep; sort($opts); }
+	foreach($opts as $n){
+		if($n > GD_KEEP_MAX) continue;
+		echo '<option value="'.$n.'"'.($n === $keep ? ' selected' : '').'>'.$n.'</option>';
 	}
-	echo '</ul>';
+	echo '</select><label for="keep_releases">successful deploys</label>'
+		.'<noscript><button class="flat-butt-primary btn-sm" type="submit">Save</button></noscript>'
+		.'<i class="fas fa-info-circle gd-faint" title="Older saved versions are deleted automatically. '
+		.'The live version always counts as one and is never deleted." aria-hidden="true"></i></div></form>';
 	gd_card_end();
 }
 
@@ -1237,6 +1436,59 @@ if($is_post){
 		}
 		gd_redirect('?act=list&msg=rollback_queued');
 
+	}elseif($act === 'delrelease'){
+		// Delete one saved version to free disk. Never the live one, never mid-build
+		// (a running build may be reading it as its hard-link base or rollback source).
+		$site = gd_post('site');
+		$cfg  = gd_require_site($site, $user);
+		$sha  = gd_post('sha');
+		if(!preg_match('~^[0-9a-f]{40}$~', $sha)) gd_stop('Invalid release', 'That is not a valid commit id.', 400);
+		$known = false;
+		foreach(gd_releases($cfg) as $r){ if(hash_equals($r['sha'], $sha)){ $known = true; break; } }
+		if(!$known) gd_stop('Release not available', 'That version is not stored for this site any more.', 404);
+		$st   = gd_status($site);
+		$live = gd_live_sha($st);
+		if($live !== '' && hash_equals($live, $sha)){
+			gd_stop('Version is live', 'That version is what visitors see right now, so it cannot be deleted. Deploy or restore another version first.', 409);
+		}
+		if(gd_busy($site, $st)){
+			gd_stop('Build in progress', 'A deploy for '.$site.' is running or queued. Wait for it to finish, then delete the version.', 409);
+		}
+		$o = ''; $e = '';
+		if(gd_asuser($cfg['user'], 'reldel', $site, $o, $e, array($sha, $live !== '' ? $live : '-')) !== 0){
+			gd_stop('Delete failed', 'The saved version could not be deleted: '.$e, 500);
+		}
+		gd_redirect('?act=log&site='.rawurlencode($site).'&msg=rel_deleted#versions');
+
+	}elseif($act === 'keep'){
+		// Per-site limit on saved versions; applied right away when no build is running,
+		// otherwise by that build when it finishes.
+		$site = gd_post('site');
+		$cfg  = gd_require_site($site, $user);
+		$keep = gd_post('keep');
+		if(!preg_match('~^[0-9]{1,2}$~', $keep) || !gd_valid_keep((int)$keep)){
+			gd_stop('Invalid limit', 'Choose between 1 and '.GD_KEEP_MAX.' versions.', 400);
+		}
+		$keep = (int)$keep;
+		$cfg['keep_releases'] = $keep;
+		if(!gd_save_json(GD_SITES.'/'.$site.'.json', $cfg, 0600)){
+			gd_stop('Write failed', 'Could not save the site configuration.', 500);
+		}
+		$st  = gd_status($site);
+		$msg = 'keep_saved';
+		if(!gd_busy($site, $st)){
+			$live = gd_live_sha($st);
+			$o = ''; $e = '';
+			if(gd_asuser($cfg['user'], 'relprune', $site, $o, $e, array((string)$keep, $live !== '' ? $live : '-')) !== 0){
+				gd_stop('Cleanup failed', 'The limit was saved, but older versions could not be removed now: '.$e
+					.' They will be removed after the next successful deploy.', 500);
+			}
+			$msg = (strpos($o, 'pruned ') !== false) ? 'keep_pruned' : 'keep_saved';
+		}else{
+			$msg = 'keep_later';
+		}
+		gd_redirect('?act=log&site='.rawurlencode($site).'&msg='.$msg.'#versions');
+
 	}elseif($act === 'delete'){
 		$site = gd_post('site');
 		$cfg  = gd_require_site($site, $user);
@@ -1515,6 +1767,10 @@ $msgmap = array(
 	'rollback_queued' => 'Restoring that version — it goes live in a few seconds.',
 	'deleted' => 'Site disconnected. Your published files were left exactly as they were.',
 	'saved'   => 'Settings saved. They apply to the next deploy.',
+	'rel_deleted' => 'Saved version deleted. The live site was not touched.',
+	'keep_saved'  => 'Limit saved. Nothing needed removing.',
+	'keep_pruned' => 'Limit saved. Older versions beyond it were deleted to free disk space.',
+	'keep_later'  => 'Limit saved. A build is running, so extra versions are removed when it finishes.',
 	'gh_disconnected' => 'GitHub disconnected from your account.',
 	'gh_refreshed'    => 'Reading your repository list from GitHub again.',
 );
@@ -1595,15 +1851,23 @@ if($view === 'list' || $view === 'deploy'){
 			}
 			echo '</div>';
 
+			// what is live, by name — the thing people actually recognise
+			$lv = gd_live_sha($st);
+			if($lv !== ''){
+				$lm = gd_commit_msg(gd_build_index($s), $lv);
+				echo '<div class="gd-site-commit">'
+					.'<span class="mono" title="Live commit">'.h(substr($lv, 0, 7)).'</span>'
+					.($lm !== '' ? '<span class="gd-site-msg" title="'.h($lm).'">'.h(gd_trim_msg($lm, 90)).'</span>' : '')
+					.'</div>';
+			}
 			echo '<div class="gd-site-meta">'
 				.'<span class="mono" title="'.h($c['repo']).'">'.h(gd_short_repo($c['repo'])).'</span>'
 				.'<span class="gd-dot">&middot;</span><span class="mono"><i class="fas fa-code-branch me-1" aria-hidden="true"></i>'
 				.h($c['branch']).'</span>';
 			$rdir = isset($c['root_dir']) ? trim((string)$c['root_dir']) : '';
 			if($rdir !== '') echo '<span class="gd-dot">&middot;</span><span class="mono">folder: '.h($rdir).'</span>';
-			echo '<span class="gd-dot">&middot;</span><span class="mono">'.h(gd_mode_label($c)).'</span>';
-			if($sha !== '') echo '<span class="gd-dot">&middot;</span><span class="mono">'.h($sha).'</span>';
-			echo '<span class="gd-dot">&middot;</span>'.gd_source_tag($c)
+			echo '<span class="gd-dot">&middot;</span><span class="mono">'.h(gd_mode_label($c)).'</span>'
+				.'<span class="gd-dot">&middot;</span>'.gd_source_tag($c)
 				.'</div>';
 
 			if(!isset($domains[$s])){
@@ -1628,8 +1892,8 @@ if($view === 'list' || $view === 'deploy'){
 			}
 			echo '</div><div class="gd-site-actions gd-actions">';
 			gd_deploy_form($s, true);
-			echo ' <a class="flat-butt-primary btn-sm" href="?act=log&amp;site='.h(rawurlencode($s)).'"><i class="fas fa-file-alt me-1"></i>Logs</a> '
-				.'<a class="flat-butt-primary btn-sm" href="?act=log&amp;site='.h(rawurlencode($s)).'#versions"><i class="fas fa-history me-1"></i>Versions</a> '
+			echo ' <a class="flat-butt-primary btn-sm" href="?act=log&amp;site='.h(rawurlencode($s)).'" '
+				.'title="Builds, saved versions and logs"><i class="fas fa-history me-1"></i>Deployments</a> '
 				.'<a class="flat-butt-primary btn-sm gd-iconbtn" href="?act=edit&amp;site='.h(rawurlencode($s)).'" '
 				.'title="Settings for '.h($s).'" aria-label="Settings for '.h($s).'"><i class="fas fa-cog"></i></a>'
 				.'</div></li>';
@@ -2127,6 +2391,7 @@ if($view === 'log'){
 		$path = GD_LOGS.'/'.$site.'/'.$want;
 	}
 	$st       = gd_status($site);
+	$bix      = gd_build_index($site);
 	$queued   = gd_queued($site);
 	$stalled  = gd_stalled($st);
 	$building = (isset($st['state']) && $st['state'] === 'building' && !$stalled);
@@ -2134,49 +2399,72 @@ if($view === 'log'){
 
 	// JS tails the log while a build runs; meta refresh is only the noscript fallback
 	gd_head('Deploy log — '.$site, $busy ? 5 : 0, '', $busy);
-	echo '<nav class="gd-crumbs"><a href="?act=list">My sites</a> / '.h($site).' / deploys</nav>';
+	echo '<nav class="gd-crumbs"><a href="?act=list">My sites</a> <span class="gd-dot">/</span> '.h($site).'</nav>';
+	if($flash) gd_note('<i class="fas fa-check-circle me-1"></i>'.h($flash), 'ok');
 
 	$key   = gd_state_key($st, $queued);
 	$secs  = gd_build_secs($st);
 	$trig  = isset($st['trigger']) ? (string)$st['trigger'] : '';
-	// the runner's own trigger words, spelled out for people
-	$trigl = array('manual' => 'started by you', 'webhook' => 'started by a push to GitHub',
-		'rollback' => 'restored an earlier version', 'retry' => 'an automatic retry');
+	$trigl = array('manual' => 'started by you', 'webhook' => 'pushed to GitHub',
+		'rollback' => 'restored an earlier version', 'retry' => 'automatic retry');
+	$sq    = h(rawurlencode($site));
 
-	gd_card('<i class="fas fa-rocket panel-icon"></i>'.h($site));
-	echo '<div class="gd-status">'
-		.'<div class="gd-status-pill">'.gd_badge($st, $queued, true).'</div>'
-		.'<div class="gd-status-facts">';
-	$facts = array();
-	if($building){
-		$facts[] = 'Started '.gd_rel(isset($st['started']) ? $st['started'] : 0);
-	}elseif($queued && !$building){
-		$facts[] = 'Waiting for a free build slot — this normally takes a few seconds';
-	}elseif(!empty($st['finished'])){
-		$facts[] = (($key === 'failed') ? 'Failed ' : 'Finished ').gd_rel($st['finished']);
-	}elseif(!empty($st['started'])){
-		$facts[] = 'Started '.gd_rel($st['started']);
-	}
-	if($secs > 0 && !$building) $facts[] = 'took '.h(gd_dur($secs));
-	if(gd_short_sha($st) !== '') $facts[] = 'commit <span class="mono">'.h(gd_short_sha($st)).'</span>';
-	if(isset($trigl[$trig])) $facts[] = h($trigl[$trig]);
-	echo implode(' <span class="gd-dot">&middot;</span> ', $facts);
+	/* ---- overview: what is live, what happened last, where it comes from ---- */
+	echo '<div class="card soft-card mb-4"><div class="card-body px-4 py-4">'
+		.'<div class="gd-ov-top"><div class="gd-ov-title">'
+		.'<h2 class="gd-ov-domain">'.h($site).'</h2>'.gd_badge($st, $queued, true)
+		.'<a class="gd-ov-open" href="https://'.h($site).'" target="_blank" rel="noopener">Open site'
+		.'<i class="fas fa-external-link-alt gd-ext" aria-hidden="true"></i></a></div>'
+		.'<div class="gd-ov-act">';
+	gd_deploy_form($site, false, $key === 'review');   // "Looks right" is the main action then
+	echo ' <a class="flat-butt-primary" href="?act=edit&amp;site='.$sq.'"><i class="fas fa-cog me-1"></i>Settings</a></div></div>';
+
+	$live = gd_live_sha($st);
+	$lmsg = $live !== '' ? gd_commit_msg($bix, $live) : '';
+	if($lmsg === '' && $live !== '' && isset($st['last_sha']) && $st['last_sha'] === $live) $lmsg = gd_status_msg($st, $bix);
+
+	if($building)      { $last = 'Building now'; $lsub = 'started '.gd_rel(isset($st['started']) ? $st['started'] : 0); }
+	elseif($queued)    { $last = 'Queued'; $lsub = 'starts in a few seconds'; }
+	elseif(!empty($st['finished'])){
+		$last = (($key === 'failed') ? 'Failed ' : '').gd_rel($st['finished']);
+		$bits = array();
+		if($secs > 0) $bits[] = 'took '.h(gd_dur($secs));
+		if(isset($trigl[$trig])) $bits[] = h($trigl[$trig]);
+		$lsub = implode(' &middot; ', $bits);
+	}else{ $last = 'Never'; $lsub = 'press Deploy now to publish it'; }
+
 	$rdir = isset($cfg['root_dir']) ? trim((string)$cfg['root_dir']) : '';
-	echo '</div><div class="gd-status-side"><span class="mono">'
-		.h(gd_short_repo($cfg['repo'])).'</span> <span class="gd-dot">&middot;</span> <span class="mono">'
-		.'<i class="fas fa-code-branch me-1" aria-hidden="true"></i>'.h($cfg['branch']).'</span> '
-		.($rdir !== '' ? '<span class="gd-dot">&middot;</span> <span class="mono">folder: '.h($rdir).'</span> ' : '')
-		.'<span class="gd-dot">&middot;</span> <span class="mono">'.h(gd_mode_label($cfg)).'</span> '
-		.'<a href="https://'.h($site).'" target="_blank" rel="noopener">Open the site<i class="fas fa-external-link-alt gd-ext" aria-hidden="true"></i></a>'
-		.'</div></div>';
+	$pull = (gd_site_mode($cfg) === 'pull');
+	$bcmd = isset($cfg['build_cmd']) ? trim((string)$cfg['build_cmd']) : '';
+	$odir = isset($cfg['output_dir']) ? trim((string)$cfg['output_dir']) : '';
 
+	echo '<dl class="gd-facts">'
+		.'<div><dt>Live version</dt><dd>'
+		.($live !== ''
+			? '<span class="gd-facts-main" title="'.h($lmsg).'">'.h($lmsg !== '' ? gd_trim_msg($lmsg, 70) : 'Commit '.substr($live, 0, 7)).'</span>'
+				.'<span class="gd-sub mono">'.h(substr($live, 0, 7)).'</span>'
+			: '<span class="gd-facts-main gd-faint">Nothing deployed yet</span>')
+		.'</dd></div>'
+		.'<div><dt>Last deploy</dt><dd><span class="gd-facts-main">'.$last.'</span>'
+		.($lsub !== '' ? '<span class="gd-sub">'.$lsub.'</span>' : '').'</dd></div>'
+		.'<div><dt>Source</dt><dd><span class="gd-facts-main mono" title="'.h($cfg['repo']).'">'.h(gd_short_repo($cfg['repo'])).'</span>'
+		.'<span class="gd-sub"><i class="fas fa-code-branch me-1" aria-hidden="true"></i>'.h($cfg['branch'])
+		.($rdir !== '' ? ' &middot; folder '.h($rdir) : '').' &middot; '.gd_source_tag($cfg).'</span></dd></div>'
+		.'<div><dt>Build</dt><dd>'
+		.($pull
+			? '<span class="gd-facts-main">Files only</span><span class="gd-sub">repository files are published as they are</span>'
+			: '<span class="gd-facts-main mono">'.h($bcmd !== '' ? $bcmd : 'auto-detected').'</span>'
+				.'<span class="gd-sub">output '.h($odir !== '' ? $odir.'/' : 'folder detected').'</span>')
+		.'</dd></div></dl>';
+
+	// state notes, inside the card they explain
 	if(!empty($st['error'])) gd_note('<i class="fas fa-times-circle me-1"></i>'.h($st['error']), 'err');
 	if($stalled) gd_note('<i class="fas fa-exclamation-triangle me-1"></i>This build never told us how it ended. '
 		.'It started more than 30 minutes ago and nothing has updated it since, so it will not finish on its own. '
-		.'The output below is as far as it got — press <strong>Deploy</strong> to try again.', 'warn');
+		.'Its output is below as far as it got — press <strong>Deploy now</strong> to try again.', 'warn');
 	if($busy) gd_note('<i class="fas fa-sync-alt me-1"></i>'
 		.($building ? 'Building right now — the output below updates as it runs.'
-			: 'Queued — the build starts in a few seconds and the output appears here.'));
+			: 'Queued — the build starts in a few seconds and its output appears below.'));
 	$rsha = isset($st['review_sha']) ? (string)$st['review_sha'] : '';
 	if($key === 'review'){
 		gd_note('<i class="fas fa-eye me-1"></i><strong>Nothing has been changed yet.</strong> The website folder already holds '
@@ -2189,44 +2477,27 @@ if($view === 'log'){
 			echo '</div>';
 		}
 	}
-	if(!$logs && !$busy && empty($st['error'])){
-		echo '<div class="hint">This site has not been deployed yet. Press <strong>Deploy</strong> below to publish it '
-			.'for the first time.</div>';
-	}
-	echo '<div class="gd-cta">';
-	gd_deploy_form($site);
-	echo ' <a class="flat-butt-primary" href="?act=edit&amp;site='.h(rawurlencode($site)).'"><i class="fas fa-cog me-1"></i>Settings</a> '
-		.'<a class="flat-butt-primary" href="?act=list"><i class="fas fa-list-ul me-1"></i>My sites</a></div>';
-	gd_card_end();
+	echo '</div></div>';
 
-	gd_releases_card($cfg, $st, $busy);
+	/* ---- deployments (builds + saved versions, one list) ---- */
+	gd_deploys_card($cfg, $st, $logs, $bix, $path, $building, $busy);
 
+	/* ---- output of the selected build ---- */
+	echo '<div id="output"></div>';
+	$sel = ($path !== '') ? gd_log_row($path, $bix) : null;
 	gd_card('<i class="fas fa-terminal panel-icon"></i>Build output',
-		'Exactly what the build printed — the place to look when something did not work.');
-	if($logs){
-		gd_h3('Recent builds');
-		echo '<ul class="gd-logs">';
-		foreach(array_slice($logs, 0, 10) as $i => $l){
-			$b   = basename($l);
-			$cur = ($l === $path);
-			echo '<li'.($cur ? ' class="cur"' : '').'><a href="?act=log&amp;site='.h(rawurlencode($site)).'&amp;file='.h(rawurlencode($b)).'">'
-				.gd_rel(@filemtime($l)).'</a>'
-				.($i === 0 ? ' <span class="gd-tag">latest</span>' : '')
-				.($cur ? ' <span class="gd-tag">you are here</span>' : '')
-				.' <span class="hint">'.h($b).'</span></li>';
+		$sel ? 'Showing '.gd_build_name($sel, 'the build').' &middot; '.gd_rel(@filemtime($path))
+			: 'Exactly what the build printed — the place to look when something did not work.');
+	if(($logs && $path !== '' && $path !== $logs[0]) || $busy){
+		echo '<div class="gd-logbar">';
+		if($logs && $path !== '' && $path !== $logs[0]){
+			echo '<span>This is an older build.</span><a href="?act=log&amp;site='.$sq.'#output">'
+				.'<i class="fas fa-angle-double-right me-1"></i>Show the latest build</a>';
 		}
-		echo '</ul>';
+		if($busy) echo '<span class="gd-logbar-live"><i class="fas fa-circle-notch fa-spin me-1" aria-hidden="true"></i>'
+			.'Updating live &middot; scrolls with the build</span>';
+		echo '</div>';
 	}
-
-	gd_h3('Output');
-	echo '<div class="gd-logbar">'
-		.'<span>'.($path !== '' ? 'Showing the build from '.gd_rel(@filemtime($path)) : 'No build output yet').'</span>';
-	if($logs && $path !== '' && $path !== $logs[0]){
-		echo '<a href="?act=log&amp;site='.h(rawurlencode($site)).'"><i class="fas fa-angle-double-right me-1"></i>Jump to the latest build</a>';
-	}
-	if($busy) echo '<span class="gd-logbar-live"><i class="fas fa-circle-notch fa-spin me-1" aria-hidden="true"></i>'
-		.'Updating live &middot; scrolls with the build</span>';
-	echo '</div>';
 	if($path === '' || !is_file($path)){
 		if($busy){
 			echo '<pre id="gdlog" data-site="'.h($site).'" data-file="" data-off="0" data-mode="'
@@ -2248,13 +2519,13 @@ if($view === 'log'){
 			.($building ? 'building' : ($queued ? 'queued' : 'static')).'">'
 			.h($txt !== '' ? $txt : '(empty)').'</pre>';
 	}
-
-	if(!$busy){
-		echo '<div class="gd-cta gd-actions">';
-		gd_deploy_form($site, true);
-		echo ' <a class="flat-butt-primary btn-sm" href="?act=edit&amp;site='.h(rawurlencode($site)).'"><i class="fas fa-cog me-1"></i>Settings</a></div>';
-	}
 	gd_card_end();
+
+	// row menus (<details>): close when clicking elsewhere or pressing Escape
+	echo '<script>(function(){function closeAll(x){var m=document.querySelectorAll("details.gd-menu[open]");'
+		.'for(var i=0;i<m.length;i++) if(m[i]!==x) m[i].removeAttribute("open");}'
+		.'document.addEventListener("click",function(e){closeAll(e.target.closest?e.target.closest("details.gd-menu"):null);});'
+		.'document.addEventListener("keydown",function(e){if(e.key==="Escape") closeAll(null);});})();</script>';
 
 	if($busy){
 		echo '<div id="gdstop" class="hint" style="display:none"></div>';

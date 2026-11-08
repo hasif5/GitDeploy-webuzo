@@ -82,10 +82,13 @@ gd_export_panel_env(){
 	done < <(env | grep '^GD_ENV_' || true)
 }
 
-# Keep the 5 most recent releases (never pruning the one just published)
+# Keep the GD_KEEP_RELEASES most recent releases (site setting, 1-30, default 5),
+# never pruning the one just published
 gd_prune_releases(){
-	local keep="$1" old
-	ls -1t "$WORK/releases" 2>/dev/null | grep -v '\.new$' | tail -n +6 | while IFS= read -r old; do
+	local keep="$1" n="${GD_KEEP_RELEASES:-5}" old
+	case "$n" in ''|*[!0-9]*) n=5;; esac
+	if [ "$n" -lt 1 ] || [ "$n" -gt 30 ]; then n=5; fi
+	ls -1t "$WORK/releases" 2>/dev/null | grep -v '\.new$' | tail -n +$((n + 1)) | while IFS= read -r old; do
 		[ "$old" != "$keep" ] && rm -rf "$WORK/releases/$old" && echo "   pruned old release $old"
 	done
 }
@@ -369,6 +372,9 @@ else
 fi
 SHA=$(git -C "$REPO" rev-parse HEAD)
 echo "== Building commit $SHA"
+# One line each, control characters stripped, bounded — the panel labels builds with these.
+echo "== Commit: $(git -C "$REPO" log -1 --format=%s HEAD 2>/dev/null | tr -d '\000-\037\177' | cut -c1-200)"
+echo "== Author: $(git -C "$REPO" log -1 --format='%an, %cd' --date=format:'%Y-%m-%d %H:%M' HEAD 2>/dev/null | tr -d '\000-\037\177' | cut -c1-120)"
 
 # Submodules (if any) — same auth (deploy key / app token) applies
 if [ -f "$REPO/.gitmodules" ]; then

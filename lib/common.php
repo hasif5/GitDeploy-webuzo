@@ -100,6 +100,19 @@ function gd_site_mode($cfg){
 	return (is_array($cfg) && isset($cfg['deploy_mode']) && $cfg['deploy_mode'] === 'pull') ? 'pull' : 'build';
 }
 
+/**
+ * How many successful deploys ("Previous versions") are kept on disk for a site.
+ * Site config key `keep_releases`; absent or out of range = the old fixed default.
+ * The live version always counts as one of them and is never removed.
+ */
+define('GD_KEEP_DEFAULT', 5);
+define('GD_KEEP_MAX', 30);
+function gd_valid_keep($n){ return is_int($n) && $n >= 1 && $n <= GD_KEEP_MAX; }
+function gd_keep_releases($cfg){
+	$n = (is_array($cfg) && isset($cfg['keep_releases']) && is_numeric($cfg['keep_releases'])) ? (int)$cfg['keep_releases'] : GD_KEEP_DEFAULT;
+	return gd_valid_keep($n) ? $n : GD_KEEP_DEFAULT;
+}
+
 // Relative dir inside the repo, e.g. "dist", "build", "packages/site/dist"
 function gd_valid_output_dir($dir){
 	return is_string($dir) && preg_match('~^[A-Za-z0-9][A-Za-z0-9/_.-]{0,100}$~', $dir)
@@ -215,6 +228,78 @@ function gd_site_logs($site){
 function gd_prune_logs($site, $keep = 10){
 	$logs = gd_site_logs($site);
 	foreach(array_slice($logs, $keep) as $old) @unlink($old);
+}
+
+// build.sh cuts by bytes, which can split a multi-byte character; json_encode
+// refuses invalid UTF-8, so drop any broken sequence before it is stored.
+function gd_clean_utf8($s){
+	$s = (string)$s;
+	if(!preg_match('//u', $s)) $s = rtrim((string)mb_convert_encoding($s, 'UTF-8', 'UTF-8'), '?');
+	return trim($s);
+}
+
+/**
+ * What one deploy log is about, read from the lines build.sh/runner write themselves:
+ * array('sha','msg','author','trigger','rollback','result') — result is success /
+ * failed / review, or '' when the log does not say (still running, or cut short).
+ * Only the FIRST "== Commit:" etc. line counts: ours is printed before any code from
+ * the repository runs. Values are display-only and always HTML-escaped by callers.
+ */
+function gd_log_facts($path){
+	$f = array('sha' => '', 'msg' => '', 'author' => '', 'trigger' => '', 'rollback' => false, 'result' => '');
+	if(!is_file($path) || is_link($path)) return $f;
+	$head = (string)@file_get_contents($path, false, null, 0, 16384);
+	$size = (int)@filesize($path);
+	$tail = $size > 4096 ? (string)@file_get_contents($path, false, null, $size - 4096, 4096) : $head;
+	if(preg_match('~^trigger: ([a-z]{1,20})$~m', $head, $m)) $f['trigger'] = $m[1];
+	if(preg_match('~^== Building commit ([0-9a-f]{40})$~m', $head, $m)){
+		$f['sha'] = $m[1];
+	}elseif(preg_match('~^== Rolling back to release ([0-9a-f]{40})~m', $head, $m)){
+		$f['sha'] = $m[1]; $f['rollback'] = true;
+	}
+	if(preg_match('~^== Commit: ([^\r\n]{1,200})$~m', $head, $m)) $f['msg'] = gd_clean_utf8($m[1]);
+	if(preg_match('~^== Author: ([^\r\n]{1,120})$~m', $head, $m)) $f['author'] = gd_clean_utf8($m[1]);
+	if(preg_match('~^== (Deployed [0-9a-f]{40}|Rolled back to [0-9a-f]{40}) ~m', $tail)) $f['result'] = 'success';
+	elseif(strpos($tail, 'press "Looks right') !== false) $f['result'] = 'review';
+	elseif(preg_match('~^(FATAL|ERROR)~m', $tail) || strpos($tail, 'timed out') !== false) $f['result'] = 'failed';
+	return $f;
+}
+
+/**
+ * Per-site build index, root-only next to the logs: GD_LOGS/<site>/builds.json =
+ * array('builds' => array(<log name> => facts + state), 'commits' => array(<sha> =>
+ * array('msg','author','ts'))). The commits map outlives log pruning so saved versions
+ * keep their names; it is capped. Written by the runner after every build.
+ */
+function gd_build_index($site){
+	if(!gd_valid_site($site)) return array('builds' => array(), 'commits' => array());
+	$ix = gd_load_json(GD_LOGS.'/'.$site.'/builds.json');
+	if(!is_array($ix)) $ix = array();
+	foreach(array('builds', 'commits') as $k) if(!isset($ix[$k]) || !is_array($ix[$k])) $ix[$k] = array();
+	return $ix;
+}
+
+function gd_build_index_add($site, $logname, $state, $code){
+	if(!gd_valid_site($site) || !preg_match('~^deploy-[0-9-]+\.log$~', $logname)) return;
+	$f  = gd_log_facts(GD_LOGS.'/'.$site.'/'.$logname);
+	$ix = gd_build_index($site);
+	$f['state'] = (string)$state;
+	$f['exit']  = (int)$code;
+	$ix['builds'][$logname] = $f;
+	if($f['sha'] !== '' && $f['msg'] !== ''){
+		$ix['commits'][$f['sha']] = array('msg' => $f['msg'], 'author' => $f['author'], 'ts' => time());
+	}
+	// drop entries for pruned logs; keep the newest 200 commit names
+	$live = array_map('basename', gd_site_logs($site));
+	$ix['builds'] = array_intersect_key($ix['builds'], array_flip($live));
+	uasort($ix['commits'], function($a, $b){ return (int)$b['ts'] - (int)$a['ts']; });
+	$ix['commits'] = array_slice($ix['commits'], 0, 200, true);
+	gd_save_json(GD_LOGS.'/'.$site.'/builds.json', $ix, 0600);
+}
+
+// Commit subject for a sha from the index ('' when unknown).
+function gd_commit_msg($ix, $sha){
+	return (is_string($sha) && isset($ix['commits'][$sha]['msg'])) ? (string)$ix['commits'][$sha]['msg'] : '';
 }
 
 /**
