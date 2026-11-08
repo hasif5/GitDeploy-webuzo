@@ -18,14 +18,14 @@ uses semantic versioning.
 ## [1.10.0] — 2026-11-08
 
 ### Added
-- **Saved-version limit per site.** The "Previous versions" card has a *Keep the last N
+- **Saved-version limit per site.** The footer of the Deployments list has a *Keep the last N
   successful deploys* control (1–30, default 5 — unchanged behaviour until someone
   changes it). Lowering it removes the extra versions immediately; if a build is running,
   that build applies the new limit when it finishes. Stored as `keep_releases` in the
   site config, passed to builds as `GD_KEEP_RELEASES`.
-- **Delete a saved version** from the card to free disk space. The live version can
+- **Delete a saved version** (⋮ menu on its row) to free disk space. The live version can
   never be deleted, and nothing can be deleted while a build is running or queued.
-- The card shows how many versions are saved and how much disk they use.
+- The list footer shows how many versions are saved and how much disk they use.
 - **Builds are named after their commit.** "Recent builds" now lists each build by its
   commit message with a result icon (deployed / failed / preview / building), short sha,
   time, what started it and the commit author; restores read "Restored: <message>".
